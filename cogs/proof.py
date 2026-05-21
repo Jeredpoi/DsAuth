@@ -99,7 +99,7 @@ class ProofView(discord.ui.View):
         embed = interaction.message.embeds[0]
         form_type = _form_type_from_title(embed.title or "")
         min_level = APPROVE_MIN_RANK.get(form_type, 2)
-        approver = interaction.guild.get_member(interaction.user.id) or interaction.user
+        approver = interaction.user
         approver_level = get_member_rank_level(approver)
 
         if approver_level < min_level:
@@ -135,7 +135,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "approved")
 
-        server = get_server_for_member(approver, interaction.client.cfg)
+        server = get_server_for_member(interaction.user, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -148,7 +148,7 @@ class ProofView(discord.ui.View):
         data = _extract_embed_data(embed)
         mod_id = data.get("mod_id", 0)
 
-        rejecter = interaction.guild.get_member(interaction.user.id) or interaction.user
+        rejecter = interaction.user
         embed.color = discord.Color.red()
         rank_display = next((r.name for r in reversed(getattr(rejecter, "roles", []))
                              if r.name in RANKS), "—")
@@ -164,7 +164,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "rejected")
 
-        server = get_server_for_member(rejecter, interaction.client.cfg)
+        server = get_server_for_member(interaction.user, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -184,8 +184,9 @@ async def _post_form(
     guild = interaction.guild
     cfg = interaction.client.cfg
 
-    # Берём Member из кэша — у него актуальные роли; interaction.user может быть User
-    member = guild.get_member(interaction.user.id) or interaction.user
+    # interaction.user в guild-командах всегда Member с актуальными ролями из payload
+    # guild.get_member() может вернуть неполный кэш — не используем
+    member = interaction.user
 
     # 1. Сервер: по роли Discord или глобальной БД user_servers
     server = server_override or get_server_for_member(member, cfg)
