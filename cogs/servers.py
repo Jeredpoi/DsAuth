@@ -16,14 +16,11 @@ def get_server_for_member(member, cfg: dict | None = None) -> str | None:
     for role in getattr(member, "roles", []):
         if is_server_role(role.name):
             return role.name
-    # Запасной вариант: база user→server из конфига
+    # Глобальная база user_id → server (работает на любом Discord-сервере)
     if cfg is not None:
-        guild_id = getattr(getattr(member, "guild", None), "id", None)
-        if guild_id:
-            guild_cfg = get_guild_cfg(cfg, guild_id)
-            server = guild_cfg.get("user_servers", {}).get(str(member.id))
-            if server:
-                return server
+        server = cfg.get("user_servers", {}).get(str(member.id))
+        if server:
+            return server
     return None
 
 

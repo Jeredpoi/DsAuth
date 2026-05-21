@@ -151,8 +151,7 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
             return
 
-        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
-        guild_cfg.setdefault("user_servers", {})[str(member.id)] = server
+        self.bot.cfg.setdefault("user_servers", {})[str(member.id)] = server
         save_config(self.bot.cfg)
 
         await interaction.response.send_message(
@@ -231,7 +230,7 @@ class AdminCog(commands.Cog):
         server_roles = [r.name for r in target.roles if r.name.isdigit() and 1 <= int(r.name) <= 90]
         rank_roles = [r.name for r in target.roles if r.name in ("Младший модератор", "Модератор", "Старший модератор", "Куратор модерации", "Заместитель главного модератора", "Главный модератор")]
 
-        user_server_db = guild_cfg.get("user_servers", {}).get(str(target.id), "—")
+        user_server_db = self.bot.cfg.get("user_servers", {}).get(str(target.id), "—")
         proof_ch_id = guild_cfg.get("proof_channel_id", 0)
         proof_ch = interaction.guild.get_channel(proof_ch_id)
         servers_cfg = guild_cfg.get("servers", {})

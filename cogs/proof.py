@@ -186,32 +186,17 @@ async def _post_form(
 
     # Берём Member из кэша — у него актуальные роли; interaction.user может быть User
     member = guild.get_member(interaction.user.id) or interaction.user
-    uid_str = str(interaction.user.id)
 
-    # 1. Ищем сервер: по ролям / конфигу текущей гильдии / конфигу любой гильдии
+    # 1. Сервер: по роли Discord или глобальной БД user_servers
     server = server_override or get_server_for_member(member, cfg)
-    if not server:
-        for g_cfg in cfg.get("guilds", {}).values():
-            s = g_cfg.get("user_servers", {}).get(uid_str)
-            if s:
-                server = s
-                break
 
     proof_ch = None
 
-    # 2. Ищем канал: сначала в текущей гильдии, потом глобально через client
+    # 2. Канал: сначала серверный канал, потом proof_channel_id из любой гильдии
     if server:
         proof_ch = get_proof_channel(guild, cfg, server)
 
     if not proof_ch:
-        # Ищем proof_channel_id в конфиге текущей гильдии
-        guild_cfg_data = get_guild_cfg(cfg, guild.id)
-        ch_id = guild_cfg_data.get("proof_channel_id", 0)
-        if ch_id:
-            proof_ch = interaction.client.get_channel(ch_id)
-
-    if not proof_ch:
-        # Ищем proof_channel_id в конфиге любой гильдии (бот работает в нескольких серверах)
         for g_cfg in cfg.get("guilds", {}).values():
             ch_id = g_cfg.get("proof_channel_id", 0)
             if ch_id:

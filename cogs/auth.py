@@ -213,9 +213,8 @@ class AuthCog(commands.Cog):
             except Exception as e:
                 role_error = f"❌ Ошибка при выдаче роли сервера: {e}"
 
-            # Сохраняем привязку user → server в конфиг даже при ошибке роли
-            guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
-            guild_cfg.setdefault("user_servers", {})[str(member.id)] = server_num
+            # Сохраняем привязку user → server глобально (работает на любом сервере)
+            self.bot.cfg.setdefault("user_servers", {})[str(member.id)] = server_num
             save_config(self.bot.cfg)
 
         await self._disable_review(
