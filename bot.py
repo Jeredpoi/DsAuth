@@ -29,6 +29,7 @@ async def main():
         await bot.load_extension("cogs.proof")
         await bot.load_extension("cogs.admin")
         await bot.load_extension("cogs.auth")
+        await bot.load_extension("cogs.servers")
         await bot.start(TOKEN)
 
 
