@@ -2,62 +2,31 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, get_guild_cfg, RULES, RANKS, PUNISHMENTS, get_member_rank_level
+from helpers import save_config, get_guild_cfg
 
-INFO_CATEGORY = "📋 Информация"
+INFO_CATEGORY  = "📋 Информация"
 INFO_COLOR     = 0x2F3136
 ANNOUNCE_COLOR = 0x5865F2
-
-AUTH_MIN_LEVEL = 5  # ЗГМ / ГМ могут отправлять объявления
 
 
 # ─── Embed builders ───────────────────────────────────────────────────────────
 
+SERVER_RULES: list[str] = [
+    "Воздерживайтесь от оскорблений других участников",
+    "Не отправляйте контент 18+",
+    "Не спамьте сообщениями",
+    "Не пытайтесь крашнуть бота",
+]
+
+
 def _build_rules_embed() -> discord.Embed:
-    sections: dict[str, list[tuple[str, str]]] = {}
-    for rule_id, rule_text in RULES.items():
-        section = rule_id.split(".")[0]
-        sections.setdefault(section, []).append((rule_id, rule_text))
-
-    section_titles = {
-        "2": "🚫 Раздел 2 — Основные запреты",
-        "3": "💬 Раздел 3 — Текстовые каналы",
-        "4": "🔊 Раздел 4 — Голосовые каналы",
-    }
-
     embed = discord.Embed(
-        title="📖 Правила команды модерации",
-        description=(
-            "Нарушение правил влечёт наказание согласно регламенту.\n"
-            "Незнание правил не освобождает от ответственности."
-        ),
+        title="📖 Правила сервера",
         color=INFO_COLOR,
     )
-
-    for section_id in sorted(sections):
-        title = section_titles.get(section_id, f"Раздел {section_id}")
-        rules = sections[section_id]
-        lines = [f"`{rid}` — {rtext}" for rid, rtext in rules]
-        # Split field if too long (Discord limit: 1024 chars per field)
-        chunk, chunks = [], []
-        for line in lines:
-            if sum(len(l) + 1 for l in chunk) + len(line) > 1000:
-                chunks.append(chunk)
-                chunk = [line]
-            else:
-                chunk.append(line)
-        if chunk:
-            chunks.append(chunk)
-        for i, part in enumerate(chunks):
-            embed.add_field(
-                name=title if i == 0 else f"{title} (продолжение)",
-                value="\n".join(part),
-                inline=False,
-            )
-
     embed.add_field(
-        name="⚖️ Наказания",
-        value="\n".join(f"`{i+1}.` {p}" for i, p in enumerate(PUNISHMENTS)),
+        name="📋 Общие правила",
+        value="\n".join(f"`{i+1}.` {rule}" for i, rule in enumerate(SERVER_RULES)),
         inline=False,
     )
     embed.set_footer(text="Правила обновлены автоматически")
@@ -300,12 +269,11 @@ class InfoCog(commands.Cog):
         await interaction.followup.send(f"✅ Правила обновлены в {ch.mention}.", ephemeral=True)
 
     # ─── /announce ────────────────────────────────────────────────────────
-    @app_commands.command(name="announce", description="Отправить объявление в канал объявлений (ЗГМ+)")
+    @app_commands.command(name="announce", description="Отправить объявление в канал объявлений (только владелец)")
     async def announce_cmd(self, interaction: discord.Interaction):
-        if not self._is_owner(interaction) and get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
+        if not self._is_owner(interaction):
             await interaction.response.send_message(
-                "❌ Доступно только **Заместителю главного модератора** и **Главному модератору**.",
-                ephemeral=True,
+                "❌ Только для владельца сервера.", ephemeral=True
             )
             return
 
