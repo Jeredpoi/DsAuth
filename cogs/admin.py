@@ -196,6 +196,35 @@ class AdminCog(commands.Cog):
             f"⏱️ Бот работает: **{h}ч {m}м {s}с**"
         )
 
+    # ─── /debugconfig ─────────────────────────────────────────────────────
+    @app_commands.command(name="debugconfig", description="Показать конфиг и роли участника (только владелец)")
+    @app_commands.describe(member="Участник для проверки (по умолчанию — вы)")
+    async def debugconfig_cmd(self, interaction: discord.Interaction, member: discord.Member | None = None):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+
+        target = member or interaction.user
+        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
+
+        server_roles = [r.name for r in target.roles if r.name.isdigit() and 1 <= int(r.name) <= 90]
+        rank_roles = [r.name for r in target.roles if r.name in ("Младший модератор", "Модератор", "Старший модератор", "Куратор модерации", "Заместитель главного модератора", "Главный модератор")]
+
+        user_server_db = guild_cfg.get("user_servers", {}).get(str(target.id), "—")
+        proof_ch_id = guild_cfg.get("proof_channel_id", 0)
+        proof_ch = interaction.guild.get_channel(proof_ch_id)
+        servers_cfg = guild_cfg.get("servers", {})
+
+        lines = [
+            f"**Участник:** {target.mention} (`{target.id}`)",
+            f"**Роли сервера (1-90):** {', '.join(server_roles) or 'нет'}",
+            f"**Роли должности:** {', '.join(rank_roles) or 'нет'}",
+            f"**user_servers в конфиге:** `{user_server_db}`",
+            f"**proof_channel_id:** {proof_ch.mention if proof_ch else f'не найден (id={proof_ch_id})'}",
+            f"**Серверные каналы в конфиге:** {', '.join(servers_cfg.keys()) or 'нет'}",
+        ]
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCog(bot))

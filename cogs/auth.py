@@ -198,17 +198,22 @@ class AuthCog(commands.Cog):
                 server_num = field.value.strip()
                 break
 
+        role_error = None
         if server_num and server_num.isdigit():
-            server_role = discord.utils.get(guild.roles, name=server_num)
-            if not server_role:
-                server_role = await guild.create_role(
-                    name=server_num, color=discord.Color.green(),
-                    hoist=True, reason=f"Авторизация на сервер {server_num}",
-                )
-            # on_member_update автоматически создаст каналы при выдаче роли
-            await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
+            try:
+                server_role = discord.utils.get(guild.roles, name=server_num)
+                if not server_role:
+                    server_role = await guild.create_role(
+                        name=server_num, color=discord.Color.green(),
+                        hoist=True, reason=f"Авторизация на сервер {server_num}",
+                    )
+                await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
+            except discord.Forbidden:
+                role_error = f"❌ Нет прав выдать роль **{server_num}** (Manage Roles / иерархия ролей)"
+            except Exception as e:
+                role_error = f"❌ Ошибка при выдаче роли сервера: {e}"
 
-            # Сохраняем привязку user → server в конфиг
+            # Сохраняем привязку user → server в конфиг даже при ошибке роли
             guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
             guild_cfg.setdefault("user_servers", {})[str(member.id)] = server_num
             save_config(self.bot.cfg)
@@ -227,11 +232,10 @@ class AuthCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-        await interaction.response.send_message(
-            f"✅ {member.mention} авторизован как **{rank}**"
-            + (f", сервер **{server_num}**" if server_num else "") + ".",
-            ephemeral=True
-        )
+        msg = f"✅ {member.mention} авторизован как **{rank}**" + (f", сервер **{server_num}**" if server_num else "") + "."
+        if role_error:
+            msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
+        await interaction.response.send_message(msg, ephemeral=True)
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
         member = interaction.guild.get_member(user_id)
