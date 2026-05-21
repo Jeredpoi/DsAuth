@@ -124,8 +124,7 @@ class ProofCog(commands.Cog):
         await proof_channel.send(content=mention, embed=embed, view=ProofView())
 
         form_text = build_form(
-            cfg.get("moderator_nick", "Ваш_Nick_Name"),
-            user, rule, punishment,
+            cfg, user, rule, punishment,
             evidence_url=evidence.url if evidence else "",
         )
         try:
@@ -156,8 +155,7 @@ class ProofCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         cfg = self.bot.cfg
         form_text = build_form(
-            cfg.get("moderator_nick", "Ваш_Nick_Name"),
-            user, rule, punishment,
+            cfg, user, rule, punishment,
             evidence_url=evidence.url if evidence else "",
         )
         embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=datetime.now())

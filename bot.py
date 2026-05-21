@@ -19,7 +19,7 @@ intents.members = True
 intents.guilds = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents, proxy=PROXY)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, proxy=PROXY)
 bot.cfg = load_config()
 bot.owner_id_cfg = OWNER_ID
 

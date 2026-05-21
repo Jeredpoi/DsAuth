@@ -11,7 +11,7 @@ RULES: dict[str, str] = {
     "2.2":  "Трансфер Discord валюты",
     "2.3":  "Реклама",
     "2.4":  "Возрастной контент",
-    "2.5":  "Персональная информация",
+    "2.5":  "Распространение персональной информации",
     "2.6":  "Обман пользователей",
     "2.7":  "Споры о политике и религии",
     "2.8":  "Продажа за реальные деньги",
@@ -49,12 +49,46 @@ PUNISHMENTS: list[str] = [
     "Обнуление",
 ]
 
+DEFAULT_TEMPLATE = (
+    "1) Ваш Nick_Name: {moderatorNick}\n"
+    "2) ID Discord и тег нарушителя: {userId} / {userTag}\n"
+    "3) Пункт правил, который был нарушен: {ruleId} — {ruleText}\n"
+    "4) Выданное наказание: {punishment}\n"
+    "5) Дата выдачи: {dateIssued}\n"
+    "6) Дата снятия: {dateEnd}\n"
+    "7) Доказательства: {evidence}"
+)
+
+DEFAULT_CONFIG = {
+    "proof_channel_id": 0,
+    "review_role_id": 0,
+    "moderator_nick": "Ваш_Nick_Name",
+    "templates": {
+        "general": DEFAULT_TEMPLATE,
+        "oral":    "",
+        "warn":    "",
+        "mute":    "",
+        "ban":     "",
+        "gban":    "",
+    },
+}
+
 
 def load_config() -> dict:
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
-    return {"proof_channel_id": 0, "review_role_id": 0, "moderator_nick": "Ваш_Nick_Name"}
+            data = json.load(f)
+        # заполняем недостающие ключи дефолтами
+        for k, v in DEFAULT_CONFIG.items():
+            if k not in data:
+                data[k] = v
+        if "templates" not in data:
+            data["templates"] = DEFAULT_CONFIG["templates"].copy()
+        else:
+            for k, v in DEFAULT_CONFIG["templates"].items():
+                data["templates"].setdefault(k, v)
+        return data
+    return DEFAULT_CONFIG.copy()
 
 
 def save_config(data: dict):
@@ -78,17 +112,42 @@ def date_end(punishment: str) -> str:
     return fmt_date(now)
 
 
-def build_form(mod_nick: str, user: discord.Member, rule_id: str,
+def _punishment_type(punishment: str) -> str:
+    p = punishment.lower()
+    if "устное" in p:
+        return "oral"
+    if "предупрежд" in p:
+        return "warn"
+    if "мут" in p:
+        return "mute"
+    if "глобальн" in p:
+        return "gban"
+    if "бан" in p or "блокировк" in p or "обнул" in p:
+        return "ban"
+    return "general"
+
+
+def build_form(cfg: dict, user: discord.Member, rule_id: str,
                punishment: str, evidence_url: str = "") -> str:
+    templates = cfg.get("templates", {})
+    ptype = _punishment_type(punishment)
+    # берём шаблон по типу, если пустой — берём general
+    template = templates.get(ptype, "") or templates.get("general", DEFAULT_TEMPLATE)
+
     rule_text = RULES.get(rule_id, rule_id)
     now = datetime.now()
-    proof_line = evidence_url if evidence_url else "(нет)"
-    return (
-        f"1) Ваш Nick_Name: {mod_nick}\n"
-        f"2) ID Discord и тег нарушителя: {user.id} / {user}\n"
-        f"3) Пункт правил: {rule_id} — {rule_text}\n"
-        f"4) Выданное наказание: {punishment}\n"
-        f"5) Дата выдачи: {fmt_date(now)}\n"
-        f"6) Дата снятия: {date_end(punishment)}\n"
-        f"7) Доказательства: {proof_line}"
-    )
+
+    variables = {
+        "moderatorNick": cfg.get("moderator_nick", "Ваш_Nick_Name"),
+        "userId":        str(user.id),
+        "userTag":       str(user),
+        "ruleId":        rule_id,
+        "ruleText":      rule_text,
+        "punishment":    punishment,
+        "dateIssued":    fmt_date(now),
+        "dateEnd":       date_end(punishment),
+        "evidence":      evidence_url if evidence_url else "(нет)",
+    }
+
+    import re
+    return re.sub(r"\{(\w+)\}", lambda m: variables.get(m.group(1), m.group(0)), template)
