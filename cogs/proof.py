@@ -62,15 +62,11 @@ def _form_type_from_title(title: str) -> str:
     return "proof"
 
 
-async def _post_to_log(guild: discord.Guild, cfg: dict, server: str,
-                       embed: discord.Embed, command: str):
+async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: discord.Embed):
     log_ch = get_log_channel(guild, cfg, server)
     if not log_ch:
         return
-    log_embed = embed.copy()
-    if command:
-        log_embed.add_field(name="💻 Команда", value=f"```\n{command}\n```", inline=False)
-    await log_ch.send(embed=log_embed)
+    await log_ch.send(embed=embed.copy())
 
 
 # ─── ProofView ────────────────────────────────────────────────────────────────
@@ -121,7 +117,7 @@ class ProofView(discord.ui.View):
         # Лог
         server = get_server_for_member(interaction.user)
         if server:
-            await _post_to_log(interaction.guild, interaction.client.cfg, server, embed, command)
+            await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
         await interaction.response.send_message("✅ Форма одобрена.", ephemeral=True)
 

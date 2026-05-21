@@ -1,42 +1,84 @@
-import re
-
 import discord
+from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS
+from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS
 
-# ─── Список серверов ─────────────────────────────────────────────────────────
-# Имя должно совпадать с именем роли на Discord-сервере.
-# Добавляйте новые серверы сюда:
-SERVERS: list[str] = [
-    "49",
-    "50",
-]
-
-SERVER_SET: set[str] = set(SERVERS)
 COMMON_CATEGORY = "🌐 Общие каналы"
 
 
-def _find_server_channel(guild: discord.Guild, server: str, channel_key: str) -> discord.TextChannel | None:
-    """Ищет канал по сохранённому ID в конфиге."""
-    cfg_key = f"server_{server}_{channel_key}"
-    for g_cfg in [get_guild_cfg.__wrapped__ if hasattr(get_guild_cfg, '__wrapped__') else None]:
-        pass
+def is_server_role(name: str) -> bool:
+    return name.isdigit() and 1 <= int(name) <= 90
+
+
+def get_server_for_member(member: discord.Member) -> str | None:
+    for role in member.roles:
+        if is_server_role(role.name):
+            return role.name
+    return None
+
+
+def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
+    # Сначала ищем по сохранённому ID
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("proof")
+    ch = guild.get_channel(ch_id) if ch_id else None
+    if ch:
+        return ch
+    # Fallback: ищем по имени канала в категории сервера
+    category = discord.utils.get(guild.categories, name=str(server))
+    if category:
+        return discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
+    return None
+
+
+def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("logs")
+    ch = guild.get_channel(ch_id) if ch_id else None
+    if ch:
+        return ch
+    category = discord.utils.get(guild.categories, name=str(server))
+    if category:
+        return discord.utils.get(guild.text_channels, name="📊-логи", category=category)
     return None
 
 
 async def _ensure_common_channels(guild: discord.Guild):
+    everyone = guild.default_role
     category = discord.utils.get(guild.categories, name=COMMON_CATEGORY)
+
     if not category:
-        category = await guild.create_category(name=COMMON_CATEGORY)
+        mod_roles = [r for r in guild.roles if r.name in RANKS]
+        cat_ow = {
+            everyone: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+        for r in mod_roles:
+            cat_ow[r] = discord.PermissionOverwrite(view_channel=True)
+        category = await guild.create_category(name=COMMON_CATEGORY, overwrites=cat_ow)
+
+    # Общий текстовый чат для всех модераторов
+    if not discord.utils.get(guild.text_channels, name="💬-общий-чат", category=category):
+        mod_roles = [r for r in guild.roles if r.name in RANKS]
+        ch_ow = {
+            everyone: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+        for r in mod_roles:
+            ch_ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+        await guild.create_text_channel(
+            name="💬-общий-чат", category=category, overwrites=ch_ow,
+            topic="Общение всех модераторов",
+        )
+
     for i in (1, 2):
-        name = f"🔊 Общий {i}"
-        if not discord.utils.get(guild.voice_channels, name=name):
-            await guild.create_voice_channel(name=name, category=category)
+        vc_name = f"🔊 Общий {i}"
+        if not discord.utils.get(guild.voice_channels, name=vc_name, category=category):
+            await guild.create_voice_channel(name=vc_name, category=category)
 
 
 async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -> dict:
-    """Создаёт все каналы для сервера. Возвращает dict с ID созданных каналов."""
     everyone = guild.default_role
     server_role = discord.utils.get(guild.roles, name=server)
     if not server_role:
@@ -45,10 +87,8 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             hoist=True, reason=f"Роль сервера {server}",
         )
 
-    # Роли руководства
     leadership_roles = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
 
-    # Категория
     cat_name = str(server)
     category = discord.utils.get(guild.categories, name=cat_name)
     if not category:
@@ -61,7 +101,6 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
 
     channel_ids = {}
 
-    # Общение
     ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
     if not ch:
         ch = await guild.create_text_channel(
@@ -70,7 +109,6 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         )
     channel_ids["chat"] = ch.id
 
-    # Выдача наказаний
     ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
     if not ch:
         ch = await guild.create_text_channel(
@@ -79,7 +117,6 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         )
     channel_ids["proof"] = ch.id
 
-    # Руководство (Куратор, Зам, Главный)
     lead_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
         server_role: discord.PermissionOverwrite(view_channel=False),
@@ -97,7 +134,6 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         )
     channel_ids["leadership"] = ch.id
 
-    # Логи (readonly для роли сервера)
     log_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
         server_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
@@ -112,40 +148,18 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         )
     channel_ids["logs"] = ch.id
 
-    # Голосовые
     for i in (1, 2):
         vc_name = f"🔊 {server} | Голосовой {i}"
-        if not discord.utils.get(guild.voice_channels, name=vc_name):
+        if not discord.utils.get(guild.voice_channels, name=vc_name, category=category):
             await guild.create_voice_channel(name=vc_name, category=category)
 
     await _ensure_common_channels(guild)
 
-    # Сохраняем ID каналов в конфиг
     guild_cfg = get_guild_cfg(cfg, guild.id)
     guild_cfg.setdefault("servers", {})[server] = channel_ids
     save_config(cfg)
 
     return channel_ids
-
-
-def get_server_for_member(member: discord.Member) -> str | None:
-    """Возвращает имя сервера по роли участника."""
-    for role in member.roles:
-        if role.name in SERVER_SET:
-            return role.name
-    return None
-
-
-def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("proof")
-    return guild.get_channel(ch_id) if ch_id else None
-
-
-def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("logs")
-    return guild.get_channel(ch_id) if ch_id else None
 
 
 class ServersCog(commands.Cog):
@@ -156,11 +170,24 @@ class ServersCog(commands.Cog):
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         new_role_names = {r.name for r in after.roles} - {r.name for r in before.roles}
         for name in new_role_names:
-            if name in SERVER_SET:
+            if is_server_role(name):
                 try:
                     await ensure_server_channels(after.guild, name, self.bot.cfg)
                 except discord.Forbidden:
                     pass
+
+    @app_commands.command(name="setupserver", description="Создать каналы для сервера вручную")
+    @app_commands.describe(server="Номер сервера (1–90)")
+    async def setupserver_cmd(self, interaction: discord.Interaction, server: str):
+        if not (server.isdigit() and 1 <= int(server) <= 90):
+            await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await ensure_server_channels(interaction.guild, server, self.bot.cfg)
+            await interaction.followup.send(f"✅ Каналы для сервера **{server}** созданы/обновлены.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

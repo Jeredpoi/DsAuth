@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from helpers import save_config, get_guild_cfg, RANKS, UNVERIFIED_ROLE_NAME, get_member_rank_level
-from cogs.servers import ensure_server_channels, SERVER_SET
+from cogs.servers import is_server_role
 
 RANK_ABBR: dict[str, str] = {
     "мм":  "Младший модератор",
@@ -196,11 +196,8 @@ class AuthCog(commands.Cog):
                     name=server_num, color=discord.Color.blue(),
                     hoist=True, reason=f"Авторизация на сервер {server_num}",
                 )
+            # on_member_update автоматически создаст каналы при выдаче роли
             await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
-            try:
-                await ensure_server_channels(guild, server_num, self.bot.cfg)
-            except discord.Forbidden:
-                pass
 
         await self._disable_review(
             interaction, approved=True,
