@@ -1,10 +1,16 @@
+import re
 from datetime import datetime
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import RULES, PUNISHMENTS, build_form, fmt_date, get_guild_cfg
+from helpers import (
+    RULES, PUNISHMENTS, build_form, fmt_date,
+    get_guild_cfg, get_member_rank_level, build_command,
+    APPROVE_MIN_RANK, RANKS,
+)
+from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -28,7 +34,46 @@ async def punishment_autocomplete(interaction: discord.Interaction, current: str
     ][:25]
 
 
-# ─── Proof buttons ────────────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _extract_embed_data(embed: discord.Embed) -> dict:
+    """Извлекает user_id, punishment, rule_id из embed."""
+    data = {}
+    for field in embed.fields:
+        name_lower = field.name.lower()
+        if "нарушитель" in name_lower:
+            m = re.search(r"`(\d{15,20})`", field.value)
+            if m:
+                data["user_id"] = int(m.group(1))
+        elif "наказание" in name_lower:
+            data["punishment"] = field.value
+        elif "пункт" in name_lower:
+            m = re.search(r"`?(\d+\.\d+)`?", field.value)
+            if m:
+                data["rule_id"] = m.group(1)
+    return data
+
+
+def _form_type_from_title(title: str) -> str:
+    if "глобального" in title.lower():
+        return "gbanform"
+    if "бана" in title.lower() or "бан" in title.lower():
+        return "banform"
+    return "proof"
+
+
+async def _post_to_log(guild: discord.Guild, cfg: dict, server: str,
+                       embed: discord.Embed, command: str):
+    log_ch = get_log_channel(guild, cfg, server)
+    if not log_ch:
+        return
+    log_embed = embed.copy()
+    if command:
+        log_embed.add_field(name="💻 Команда", value=f"```\n{command}\n```", inline=False)
+    await log_ch.send(embed=log_embed)
+
+
+# ─── ProofView ────────────────────────────────────────────────────────────────
 
 class ProofView(discord.ui.View):
     def __init__(self):
@@ -36,9 +81,35 @@ class ProofView(discord.ui.View):
 
     @discord.ui.button(label="✅ Одобрить", style=discord.ButtonStyle.success, custom_id="proof:approve")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        form_type = _form_type_from_title(interaction.message.embeds[0].title or "")
+        min_level = APPROVE_MIN_RANK.get(form_type, 2)
+        approver_level = get_member_rank_level(interaction.user)
+
+        if approver_level < min_level:
+            needed = RANKS[min_level - 1]
+            await interaction.response.send_message(
+                f"❌ Недостаточно прав. Требуется минимум: **{needed}**.", ephemeral=True
+            )
+            return
+
         embed = interaction.message.embeds[0]
+        data = _extract_embed_data(embed)
+        user_id = data.get("user_id", 0)
+        punishment = data.get("punishment", "")
+        rule_id = data.get("rule_id", "")
+
+        command = build_command(punishment, user_id, rule_id)
+
         embed.color = discord.Color.green()
-        embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({interaction.user.id})")
+        rank_name = next((r.name for r in interaction.user.roles if r.name in APPROVE_MIN_RANK or
+                          r.name in [rn for rn in RANKS]), "—")
+        rank_display = next((r.name for r in reversed(interaction.user.roles)
+                             if r.name in RANKS), "—")
+        embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({rank_display})")
+
+        if command:
+            embed.add_field(name="💻 Команда для исполнения", value=f"```\n{command}\n```", inline=False)
+
         mid = interaction.message.id
         done = discord.ui.View()
         done.add_item(discord.ui.Button(label="✅ Одобрено", style=discord.ButtonStyle.success,
@@ -46,13 +117,22 @@ class ProofView(discord.ui.View):
         done.add_item(discord.ui.Button(label="❌ Отклонить", style=discord.ButtonStyle.danger,
                                         disabled=True, custom_id=f"done:r:{mid}"))
         await interaction.message.edit(embed=embed, view=done)
-        await interaction.response.send_message("✅ Доказательство одобрено.", ephemeral=True)
+
+        # Лог
+        server = get_server_for_member(interaction.user)
+        if server:
+            await _post_to_log(interaction.guild, interaction.client.cfg, server, embed, command)
+
+        await interaction.response.send_message("✅ Форма одобрена.", ephemeral=True)
 
     @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger, custom_id="proof:reject")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
         embed.color = discord.Color.red()
-        embed.set_footer(text=f"❌ Отклонено: {interaction.user} ({interaction.user.id})")
+        rank_display = next((r.name for r in reversed(interaction.user.roles)
+                             if r.name in RANKS), "—")
+        embed.set_footer(text=f"❌ Отклонено: {interaction.user} ({rank_display})")
+
         mid = interaction.message.id
         done = discord.ui.View()
         done.add_item(discord.ui.Button(label="✅ Одобрить", style=discord.ButtonStyle.success,
@@ -60,7 +140,47 @@ class ProofView(discord.ui.View):
         done.add_item(discord.ui.Button(label="❌ Отклонено", style=discord.ButtonStyle.danger,
                                         disabled=True, custom_id=f"done:r:{mid}"))
         await interaction.message.edit(embed=embed, view=done)
-        await interaction.response.send_message("❌ Доказательство отклонено.", ephemeral=True)
+        await interaction.response.send_message("❌ Форма отклонена.", ephemeral=True)
+
+
+# ─── Общая логика постинга формы в канал ─────────────────────────────────────
+
+async def _post_form(
+    interaction: discord.Interaction,
+    embed: discord.Embed,
+    form_text: str,
+    evidence: discord.Attachment | None,
+):
+    """Постит форму в канал сервера или в настроенный proof-канал."""
+    guild = interaction.guild
+    cfg = interaction.client.cfg
+
+    server = get_server_for_member(interaction.user)
+    if server:
+        proof_ch = get_proof_channel(guild, cfg, server)
+    else:
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        proof_ch = guild.get_channel(guild_cfg.get("proof_channel_id", 0))
+
+    if not proof_ch:
+        await interaction.followup.send(
+            "❌ Канал для форм не найден. Настройте `/setup` или попросите добавить роль сервера.",
+            ephemeral=True,
+        )
+        return
+
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    review_role_id = guild_cfg.get("review_role_id", 0)
+    mention = f"<@&{review_role_id}>" if review_role_id else None
+
+    await proof_ch.send(content=mention, embed=embed, view=ProofView())
+
+    try:
+        await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
+    except discord.Forbidden:
+        pass
+
+    await interaction.followup.send(f"✅ Отправлено в {proof_ch.mention}!", ephemeral=True)
 
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
@@ -87,29 +207,8 @@ class ProofCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
-        proof_ch_id = guild_cfg.get("proof_channel_id", 0)
-        review_role_id = guild_cfg.get("review_role_id", 0)
-
-        if not proof_ch_id:
-            await interaction.followup.send(
-                "❌ Канал доказательств не настроен. Используйте `/setup`.", ephemeral=True
-            )
-            return
-
-        proof_channel = interaction.guild.get_channel(proof_ch_id)
-        if not proof_channel:
-            await interaction.followup.send(
-                "❌ Канал не найден. Проверьте `/setup`.", ephemeral=True
-            )
-            return
-
         rule_text = RULES.get(rule, rule)
-        embed = discord.Embed(
-            title="📋 Доказательство нарушения",
-            color=0x3498DB,
-            timestamp=datetime.now(),
-        )
+        embed = discord.Embed(title="📋 Доказательство нарушения", color=0x3498DB, timestamp=datetime.now())
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
         embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=True)
@@ -118,30 +217,17 @@ class ProofCog(commands.Cog):
         embed.add_field(name="Дата", value=fmt_date(datetime.now()), inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
-        embed.set_footer(text="Ожидает проверки...")
+        embed.set_footer(text="Ожидает одобрения...")
 
-        mention = f"<@&{review_role_id}>" if review_role_id else None
-        await proof_channel.send(content=mention, embed=embed, view=ProofView())
-
-        form_text = build_form(
-            self.bot.cfg, user, rule, punishment,
-            evidence_url=evidence.url if evidence else "",
-        )
-        try:
-            await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
-        except discord.Forbidden:
-            pass
-
-        await interaction.followup.send(
-            f"✅ Доказательство отправлено в {proof_channel.mention}!", ephemeral=True
-        )
+        form_text = build_form(self.bot.cfg, user, rule, punishment,
+                               evidence_url=evidence.url if evidence else "")
+        await _post_form(interaction, embed, form_text, evidence)
 
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
-        user="Нарушитель",
-        rule="Пункт правил",
+        user="Нарушитель", rule="Пункт правил",
         punishment="Наказание (по умолчанию: Бан 7-15 дней)",
-        evidence="Скриншот доказательства (необязательно)",
+        evidence="Скриншот (необязательно)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
     async def banform_cmd(
@@ -153,34 +239,25 @@ class ProofCog(commands.Cog):
         evidence: discord.Attachment | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        form_text = build_form(
-            self.bot.cfg, user, rule, punishment,
-            evidence_url=evidence.url if evidence else "",
-        )
+
         embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=datetime.now())
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Нарушитель", value=f"{user.mention} (`{user.id}`)", inline=False)
-        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=False)
-        embed.add_field(name="Наказание", value=punishment, inline=False)
+        embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=True)
+        embed.add_field(name="Наказание", value=punishment, inline=True)
+        embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
+        embed.set_footer(text=f"Требует одобрения: Старший модератор+")
 
-        try:
-            await interaction.user.send(
-                content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```", embed=embed
-            )
-            await interaction.followup.send("✅ Форма бана отправлена в личку!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
-                embed=embed, ephemeral=True,
-            )
+        form_text = build_form(self.bot.cfg, user, rule, punishment,
+                               evidence_url=evidence.url if evidence else "")
+        await _post_form(interaction, embed, form_text, evidence)
 
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
-        user="Нарушитель",
-        rule="Пункт правил",
-        evidence="Скриншот доказательства (необязательно)",
+        user="Нарушитель", rule="Пункт правил",
+        evidence="Скриншот (необязательно)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete)
     async def gbanform_cmd(
@@ -191,30 +268,20 @@ class ProofCog(commands.Cog):
         evidence: discord.Attachment | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        cfg = self.bot.cfg
-        form_text = build_form(
-            cfg.get("moderator_nick", "Ваш_Nick_Name"),
-            user, rule, "Глобальная блокировка",
-            evidence_url=evidence.url if evidence else "",
-        )
+
         embed = discord.Embed(title="🌐 Форма глобального бана", color=0x8B0000, timestamp=datetime.now())
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Нарушитель", value=f"{user.mention} (`{user.id}`)", inline=False)
-        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=False)
-        embed.add_field(name="Наказание", value="Глобальная блокировка", inline=False)
+        embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=True)
+        embed.add_field(name="Наказание", value="Глобальная блокировка", inline=True)
+        embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
+        embed.set_footer(text="Требует одобрения: Куратор модерации+")
 
-        try:
-            await interaction.user.send(
-                content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```", embed=embed
-            )
-            await interaction.followup.send("✅ Форма G-бана отправлена в личку!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send(
-                content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
-                embed=embed, ephemeral=True,
-            )
+        form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка",
+                               evidence_url=evidence.url if evidence else "")
+        await _post_form(interaction, embed, form_text, evidence)
 
 
 async def setup(bot: commands.Bot):

@@ -144,7 +144,46 @@ RANKS: list[str] = [
     "Главный модератор",
 ]
 
+RANK_LEVELS: dict[str, int] = {r: i + 1 for i, r in enumerate(RANKS)}
+
+# Минимальный ранг для одобрения по типу формы
+APPROVE_MIN_RANK: dict[str, int] = {
+    "proof":   RANK_LEVELS["Модератор"],
+    "banform": RANK_LEVELS["Старший модератор"],
+    "gbanform": RANK_LEVELS["Куратор модерации"],
+}
+
+LEADERSHIP_RANKS: frozenset[str] = frozenset({
+    "Куратор модерации",
+    "Заместитель главного модератора",
+    "Главный модератор",
+})
+
 UNVERIFIED_ROLE_NAME = "Не авторизован"
+
+
+def get_member_rank_level(member: discord.Member) -> int:
+    return max((RANK_LEVELS.get(r.name, 0) for r in member.roles), default=0)
+
+
+def build_command(punishment: str, user_id: int, rule_id: str) -> str:
+    p = punishment.lower()
+    uid = f"<@{user_id}>"
+    if "устное" in p:
+        return ""
+    if "предупрежд" in p:
+        return f"/warn user:{uid} reason:{rule_id}"
+    if "мут" in p:
+        return f"/mute user:{uid} time:90 reason:{rule_id}"
+    if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
+        return f"/ban user:{uid} time:7 reason:{rule_id}"
+    if "перманент" in p:
+        return f"/ban user:{uid} time:365 reason:{rule_id}"
+    if "глобальн" in p:
+        return f"/gban user:{uid} reason:{rule_id}"
+    if "обнул" in p:
+        return f"/reset user:{uid} reason:{rule_id}"
+    return ""
 
 
 def build_form(cfg: dict, user: discord.Member, rule_id: str,
