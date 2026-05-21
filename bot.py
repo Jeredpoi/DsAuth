@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+PROXY = os.getenv("PROXY_URL")  # e.g. http://103.86.36.165:443
 
 MEMBER_ROLE_NAME = "Участник"
 AUTH_CATEGORY_NAME = "🔐 Авторизация"
@@ -17,7 +18,7 @@ intents.members = True
 intents.guilds = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, proxy=PROXY)
 
 # User IDs with active pending requests
 pending: set[int] = set()
