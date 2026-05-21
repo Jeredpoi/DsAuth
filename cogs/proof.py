@@ -100,13 +100,12 @@ def _build_punishment_embed(
         title=_punishment_title(punishment),
         color=_punishment_color(punishment),
     )
-    embed.add_field(name="Модератор",        value=moderator.mention,    inline=True)
-    embed.add_field(name="Нарушитель",       value=str(violator.id),     inline=True)
-    embed.add_field(name="Причина наказания", value=rule_id,             inline=False)
-    # stored for command-building on approve; shown as small inline field
-    embed.add_field(name="Наказание",        value=punishment,           inline=True)
-    embed.add_field(name="Время",            value=f"<t:{now_ts}:f>",   inline=True)
-    embed.add_field(name="Снятие",           value=(f"<t:{end_ts}:R>" if end_ts else "Перманентно"), inline=True)
+    embed.add_field(name="Модератор",         value=moderator.mention,                                 inline=False)
+    embed.add_field(name="Нарушитель",        value=str(violator.id),                                  inline=False)
+    embed.add_field(name="Причина наказания", value=rule_id,                                           inline=False)
+    embed.add_field(name="Наказание",         value=punishment,                                        inline=False)
+    embed.add_field(name="Время",             value=f"<t:{now_ts}:f>",                                 inline=False)
+    embed.add_field(name="Снятие",            value=(f"<t:{end_ts}:R>" if end_ts else "Перманентно"), inline=False)
 
     if form_type in ("banform", "gbanform"):
         min_rank = RANKS[APPROVE_MIN_RANK[form_type] - 1]
@@ -192,9 +191,21 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
         await interaction.response.send_message("✅ Доказательство добавлено.", ephemeral=True)
 
 
-# ─── Management View (ephemeral, per-click) ───────────────────────────────────
+# ─── Management Views (ephemeral, per-click) ──────────────────────────────────
 
-class ManagementView(discord.ui.View):
+class ProofManagementView(discord.ui.View):
+    """Для /proof — только добавление доказательства."""
+    def __init__(self, proof_message: discord.Message):
+        super().__init__(timeout=120)
+        self.proof_message = proof_message
+
+    @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.secondary)
+    async def add_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AddEvidenceModal(self.proof_message))
+
+
+class FormManagementView(discord.ui.View):
+    """Для /banform и /gbanform — одобрение, отклонение и доказательство."""
     def __init__(self, proof_message: discord.Message, form_type: str):
         super().__init__(timeout=120)
         self.proof_message = proof_message
@@ -202,10 +213,6 @@ class ManagementView(discord.ui.View):
 
     @discord.ui.button(label="✅ Одобрить", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.form_type == "proof":
-            await interaction.response.send_message("ℹ️ Форма пруфа не требует одобрения.", ephemeral=True)
-            return
-
         min_level = APPROVE_MIN_RANK.get(self.form_type, 2)
         if get_member_rank_level(interaction.user) < min_level:
             await interaction.response.send_message(
@@ -217,10 +224,10 @@ class ManagementView(discord.ui.View):
 
         embed = self.proof_message.embeds[0]
         data = _extract_embed_data(embed)
-        user_id   = data.get("user_id", 0)
+        user_id    = data.get("user_id", 0)
         punishment = data.get("punishment", "")
-        rule_id   = data.get("rule_id", "")
-        mod_id    = data.get("mod_id", 0)
+        rule_id    = data.get("rule_id", "")
+        mod_id     = data.get("mod_id", 0)
 
         command = build_command(punishment, user_id, rule_id)
         rank_display = next(
@@ -242,10 +249,6 @@ class ManagementView(discord.ui.View):
 
     @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.form_type == "proof":
-            await interaction.response.send_message("ℹ️ Форма пруфа не требует отклонения.", ephemeral=True)
-            return
-
         await interaction.response.defer(ephemeral=True)
 
         embed = self.proof_message.embeds[0]
@@ -286,15 +289,18 @@ class PunishmentView(discord.ui.View):
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
         form_type = _form_type_from_title(embed.title or "")
-        min_level = APPROVE_MIN_RANK.get(form_type, 2)
 
-        if get_member_rank_level(interaction.user) < min_level:
-            await interaction.response.send_message(
-                f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
-            )
-            return
+        if form_type in ("banform", "gbanform"):
+            min_level = APPROVE_MIN_RANK.get(form_type, 2)
+            if get_member_rank_level(interaction.user) < min_level:
+                await interaction.response.send_message(
+                    f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
+                )
+                return
+            view = FormManagementView(interaction.message, form_type)
+        else:
+            view = ProofManagementView(interaction.message)
 
-        view = ManagementView(interaction.message, form_type)
         await interaction.response.send_message(
             "**Управление наказанием** — выберите действие:",
             view=view,
