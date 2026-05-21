@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg
+from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg, RULES
 
 START_TIME = time.time()
 
@@ -16,6 +16,35 @@ FORM_TYPES = {
     "ban":     "Бан / блокировка",
     "gban":    "Глобальный бан",
 }
+
+
+# ─── Модальное окно редактирования правила ────────────────────────────────────
+
+class EditRuleModal(discord.ui.Modal, title="Добавить / изменить правило"):
+    rule_id_input = discord.ui.TextInput(
+        label="ID правила (например 2.1)",
+        placeholder="2.1",
+        max_length=8,
+    )
+    rule_text_input = discord.ui.TextInput(
+        label="Название правила",
+        placeholder="Неадекватное поведение",
+        max_length=200,
+    )
+
+    def __init__(self, bot: commands.Bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        rid = self.rule_id_input.value.strip()
+        rtext = self.rule_text_input.value.strip()
+        self.bot.cfg.setdefault("rules", {})[rid] = rtext
+        save_config(self.bot.cfg)
+        RULES[rid] = rtext
+        await interaction.response.send_message(
+            f"✅ Правило `{rid}` → **{rtext}**", ephemeral=True
+        )
 
 
 # ─── Модальное окно редактирования шаблона ───────────────────────────────────
@@ -148,6 +177,14 @@ class AdminCog(commands.Cog):
             f"`{{dateIssued}}` `{{dateEnd}}` `{{evidence}}`",
             ephemeral=True,
         )
+
+    # ─── /editrule ────────────────────────────────────────────────────────
+    @app_commands.command(name="editrule", description="Добавить или изменить правило (только владелец)")
+    async def editrule_cmd(self, interaction: discord.Interaction):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EditRuleModal(self.bot))
 
     # ─── /uptime ──────────────────────────────────────────────────────────
     @app_commands.command(name="uptime", description="Время работы бота")

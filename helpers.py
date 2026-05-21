@@ -85,6 +85,8 @@ def load_config() -> dict:
         data.setdefault("guilds", {})
         for k, v in DEFAULT_CONFIG["templates"].items():
             data["templates"].setdefault(k, v)
+        for rule_id, rule_text in data.get("rules", {}).items():
+            RULES[rule_id] = rule_text
         return data
     return {
         "moderator_nick": DEFAULT_CONFIG["moderator_nick"],

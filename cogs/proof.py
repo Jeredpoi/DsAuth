@@ -11,6 +11,7 @@ from helpers import (
     APPROVE_MIN_RANK, RANKS,
 )
 from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel
+from stats_db import record_form
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -37,7 +38,6 @@ async def punishment_autocomplete(interaction: discord.Interaction, current: str
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _extract_embed_data(embed: discord.Embed) -> dict:
-    """Извлекает user_id, punishment, rule_id из embed."""
     data = {}
     for field in embed.fields:
         name_lower = field.name.lower()
@@ -51,13 +51,18 @@ def _extract_embed_data(embed: discord.Embed) -> dict:
             m = re.search(r"`?(\d+\.\d+)`?", field.value)
             if m:
                 data["rule_id"] = m.group(1)
+        elif "модератор" in name_lower:
+            m = re.search(r"<@(\d+)>", field.value)
+            if m:
+                data["mod_id"] = int(m.group(1))
     return data
 
 
 def _form_type_from_title(title: str) -> str:
-    if "глобального" in title.lower():
+    t = title.lower()
+    if "глобального" in t:
         return "gbanform"
-    if "бана" in title.lower() or "бан" in title.lower():
+    if "бана" in t or "бан" in t:
         return "banform"
     return "proof"
 
@@ -77,7 +82,8 @@ class ProofView(discord.ui.View):
 
     @discord.ui.button(label="✅ Одобрить", style=discord.ButtonStyle.success, custom_id="proof:approve")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        form_type = _form_type_from_title(interaction.message.embeds[0].title or "")
+        embed = interaction.message.embeds[0]
+        form_type = _form_type_from_title(embed.title or "")
         min_level = APPROVE_MIN_RANK.get(form_type, 2)
         approver_level = get_member_rank_level(interaction.user)
 
@@ -88,17 +94,15 @@ class ProofView(discord.ui.View):
             )
             return
 
-        embed = interaction.message.embeds[0]
         data = _extract_embed_data(embed)
         user_id = data.get("user_id", 0)
         punishment = data.get("punishment", "")
         rule_id = data.get("rule_id", "")
+        mod_id = data.get("mod_id", 0)
 
         command = build_command(punishment, user_id, rule_id)
 
         embed.color = discord.Color.green()
-        rank_name = next((r.name for r in interaction.user.roles if r.name in APPROVE_MIN_RANK or
-                          r.name in [rn for rn in RANKS]), "—")
         rank_display = next((r.name for r in reversed(interaction.user.roles)
                              if r.name in RANKS), "—")
         embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({rank_display})")
@@ -114,7 +118,8 @@ class ProofView(discord.ui.View):
                                         disabled=True, custom_id=f"done:r:{mid}"))
         await interaction.message.edit(embed=embed, view=done)
 
-        # Лог
+        record_form(mod_id, form_type, "approved")
+
         server = get_server_for_member(interaction.user)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
@@ -124,6 +129,10 @@ class ProofView(discord.ui.View):
     @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger, custom_id="proof:reject")
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
+        form_type = _form_type_from_title(embed.title or "")
+        data = _extract_embed_data(embed)
+        mod_id = data.get("mod_id", 0)
+
         embed.color = discord.Color.red()
         rank_display = next((r.name for r in reversed(interaction.user.roles)
                              if r.name in RANKS), "—")
@@ -137,7 +146,8 @@ class ProofView(discord.ui.View):
                                         disabled=True, custom_id=f"done:r:{mid}"))
         await interaction.message.edit(embed=embed, view=done)
 
-        # Лог отклонения
+        record_form(mod_id, form_type, "rejected")
+
         server = get_server_for_member(interaction.user)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
@@ -175,8 +185,11 @@ async def _post_form(
     review_role_id = guild_cfg.get("review_role_id", 0)
     mention = f"<@&{review_role_id}>" if review_role_id else None
 
-    view = ProofView() if with_buttons else discord.ui.View()
+    view = ProofView() if with_buttons else None
     await proof_ch.send(content=mention, embed=embed, view=view)
+
+    form_type = _form_type_from_title(embed.title or "")
+    record_form(interaction.user.id, form_type, "sent")
 
     try:
         await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
@@ -242,6 +255,10 @@ class ProofCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
+        if user.id == interaction.user.id:
+            await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
+            return
+
         now = datetime.now()
         embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=now)
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
@@ -274,6 +291,10 @@ class ProofCog(commands.Cog):
         evidence: discord.Attachment | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
+
+        if user.id == interaction.user.id:
+            await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
+            return
 
         now = datetime.now()
         embed = discord.Embed(title="🌐 Форма глобального бана", color=0x8B0000, timestamp=now)

@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS
+from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS, RANK_LEVELS
 
 COMMON_CATEGORY = "🌐 Общие каналы"
 
@@ -231,6 +231,38 @@ class ServersCog(commands.Cog):
             await interaction.followup.send(f"🗑️ Удалено дублей: **{deleted}** в категории **{server}**.", ephemeral=True)
         else:
             await interaction.followup.send(f"✅ Дублей в категории **{server}** не найдено.", ephemeral=True)
+
+
+    @app_commands.command(name="listmods", description="Список модераторов по серверам")
+    async def listmods_cmd(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+
+        servers: dict[str, list[str]] = {}
+        for member in guild.members:
+            server = get_server_for_member(member)
+            if server:
+                rank = next(
+                    (r.name for r in sorted(member.roles, key=lambda r: RANK_LEVELS.get(r.name, 0), reverse=True)
+                     if r.name in RANK_LEVELS),
+                    "—",
+                )
+                servers.setdefault(server, []).append(f"{member.mention} — {rank}")
+
+        if not servers:
+            await interaction.followup.send("Нет авторизованных модераторов.", ephemeral=True)
+            return
+
+        embed = discord.Embed(title="👥 Модераторы по серверам", color=0x2ECC71)
+        for server_num in sorted(servers.keys(), key=int):
+            mods_list = servers[server_num]
+            embed.add_field(
+                name=f"Сервер {server_num} ({len(mods_list)})",
+                value="\n".join(mods_list),
+                inline=False,
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
