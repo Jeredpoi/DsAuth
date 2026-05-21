@@ -130,8 +130,8 @@ class AdminCog(commands.Cog):
         ch = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
         role_id = guild_cfg.get("review_role_id", 0)
         lines = [
-            "✅ **Настройки сохранены для этого сервера:**",
-            f"• Канал доказательств: {ch.mention if ch else 'не задан'}",
+            f"✅ **Настройки сохранены** (guild_id: `{interaction.guild_id}`):",
+            f"• Канал доказательств: {ch.mention if ch else '❌ не задан — укажи `proof_channel`'}",
             f"• Роль проверяющих: {'<@&' + str(role_id) + '>' if role_id else 'не задана'}",
             f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`",
             "",
@@ -139,6 +139,27 @@ class AdminCog(commands.Cog):
             "Для настройки системы авторизации используйте `/setup-auth`.",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    # ─── /assignserver ────────────────────────────────────────────────────
+    @app_commands.command(name="assignserver", description="Вручную привязать участника к серверу (только владелец)")
+    @app_commands.describe(member="Участник", server="Номер сервера (1–90)")
+    async def assignserver_cmd(self, interaction: discord.Interaction, member: discord.Member, server: str):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+        if not server.isdigit() or not (1 <= int(server) <= 90):
+            await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
+            return
+
+        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
+        guild_cfg.setdefault("user_servers", {})[str(member.id)] = server
+        save_config(self.bot.cfg)
+
+        await interaction.response.send_message(
+            f"✅ {member.mention} привязан к серверу **{server}** в базе данных.\n"
+            f"Теперь `/proof` будет направлять формы в канал сервера {server}.",
+            ephemeral=True,
+        )
 
     # ─── /setform ─────────────────────────────────────────────────────────
     @app_commands.command(name="setform", description="Настроить шаблон формы (только для владельца)")
