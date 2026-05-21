@@ -229,7 +229,7 @@ async def _post_form(
             )
         return
 
-    guild_cfg = get_guild_cfg(cfg, guild.id)
+    guild_cfg = get_guild_cfg(cfg, proof_ch.guild.id)
     review_role_id = guild_cfg.get("review_role_id", 0)
     mention = f"<@&{review_role_id}>" if review_role_id else None
 

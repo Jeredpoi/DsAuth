@@ -168,12 +168,13 @@ class AuthCog(commands.Cog):
             )
             return
 
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         member = guild.get_member(user_id)
 
         if not member:
-            await interaction.response.send_message("❌ Пользователь покинул сервер.", ephemeral=True)
             await self._disable_review(interaction, approved=False, label="Покинул сервер")
+            await interaction.followup.send("❌ Пользователь покинул сервер.", ephemeral=True)
             return
 
         # Убираем роль "Не авторизован"
@@ -234,9 +235,10 @@ class AuthCog(commands.Cog):
         msg = f"✅ {member.mention} авторизован как **{rank}**" + (f", сервер **{server_num}**" if server_num else "") + "."
         if role_error:
             msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
+        await interaction.response.defer(ephemeral=True)
         member = interaction.guild.get_member(user_id)
         await self._disable_review(
             interaction, approved=False,
@@ -249,7 +251,7 @@ class AuthCog(commands.Cog):
                 )
             except discord.Forbidden:
                 pass
-        await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True)
+        await interaction.followup.send("❌ Заявка отклонена.", ephemeral=True)
 
     async def _disable_review(self, interaction: discord.Interaction, approved: bool, label: str):
         embed = interaction.message.embeds[0]
