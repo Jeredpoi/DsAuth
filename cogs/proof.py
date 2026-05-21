@@ -10,7 +10,7 @@ from helpers import (
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
-from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel
+from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel, ensure_server_channels
 from stats_db import record_form
 
 
@@ -170,16 +170,29 @@ async def _post_form(
     server = get_server_for_member(interaction.user)
     if server:
         proof_ch = get_proof_channel(guild, cfg, server)
+        if not proof_ch:
+            # Каналы ещё не созданы — создаём автоматически
+            try:
+                await ensure_server_channels(guild, server, cfg)
+                proof_ch = get_proof_channel(guild, cfg, server)
+            except discord.Forbidden:
+                pass
+        if not proof_ch:
+            await interaction.followup.send(
+                f"❌ Не удалось найти или создать каналы для сервера **{server}**.\n"
+                f"Попросите владельца запустить `/setupserver {server}`.",
+                ephemeral=True,
+            )
+            return
     else:
         guild_cfg = get_guild_cfg(cfg, guild.id)
         proof_ch = guild.get_channel(guild_cfg.get("proof_channel_id", 0))
-
-    if not proof_ch:
-        await interaction.followup.send(
-            "❌ Канал для форм не найден. Настройте `/setup` или попросите добавить роль сервера.",
-            ephemeral=True,
-        )
-        return
+        if not proof_ch:
+            await interaction.followup.send(
+                "❌ У вас нет роли сервера (1–90). Пройдите авторизацию или попросите выдать роль сервера.",
+                ephemeral=True,
+            )
+            return
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
     review_role_id = guild_cfg.get("review_role_id", 0)
