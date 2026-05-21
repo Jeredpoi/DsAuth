@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
+from keep_alive import keep_alive
 
 load_dotenv()
 
@@ -400,4 +401,5 @@ async def setup_error(ctx: commands.Context, error: Exception):
         await ctx.send(f"❌ Ошибка: {error}")
 
 
+keep_alive()
 bot.run(TOKEN)
