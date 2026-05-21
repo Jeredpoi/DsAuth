@@ -83,7 +83,7 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
     server_role = discord.utils.get(guild.roles, name=server)
     if not server_role:
         server_role = await guild.create_role(
-            name=server, color=discord.Color.blue(),
+            name=server, color=discord.Color.green(),
             hoist=True, reason=f"Роль сервера {server}",
         )
 
@@ -176,9 +176,16 @@ class ServersCog(commands.Cog):
                 except discord.Forbidden:
                     pass
 
+    def _is_owner(self, interaction: discord.Interaction) -> bool:
+        uid = interaction.user.id
+        return uid == interaction.guild.owner_id or uid == getattr(self.bot, "owner_id_cfg", 0)
+
     @app_commands.command(name="setupserver", description="Создать каналы для сервера вручную")
     @app_commands.describe(server="Номер сервера (1–90)")
     async def setupserver_cmd(self, interaction: discord.Interaction, server: str):
+        if not self._is_owner(interaction):
+            await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
+            return
         if not (server.isdigit() and 1 <= int(server) <= 90):
             await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
             return
@@ -192,6 +199,9 @@ class ServersCog(commands.Cog):
     @app_commands.command(name="cleanupserver", description="Удалить дублирующиеся каналы сервера")
     @app_commands.describe(server="Номер сервера (1–90)")
     async def cleanupserver_cmd(self, interaction: discord.Interaction, server: str):
+        if not self._is_owner(interaction):
+            await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
+            return
         if not (server.isdigit() and 1 <= int(server) <= 90):
             await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
             return

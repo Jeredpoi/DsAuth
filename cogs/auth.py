@@ -80,8 +80,13 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
         embed.set_footer(text="Ожидает решения...")
 
+        # Пинг ЗГМ/ГМ
+        ping_roles = [r for r in interaction.guild.roles
+                      if r.name in ("Заместитель главного модератора", "Главный модератор")]
+        ping_text = " ".join(r.mention for r in ping_roles) if ping_roles else None
+
         view = AuthReviewView(member.id)
-        await review_ch.send(embed=embed, view=view)
+        await review_ch.send(content=ping_text, embed=embed, view=view)
 
         await interaction.response.send_message(
             "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
@@ -193,7 +198,7 @@ class AuthCog(commands.Cog):
             server_role = discord.utils.get(guild.roles, name=server_num)
             if not server_role:
                 server_role = await guild.create_role(
-                    name=server_num, color=discord.Color.blue(),
+                    name=server_num, color=discord.Color.green(),
                     hoist=True, reason=f"Авторизация на сервер {server_num}",
                 )
             # on_member_update автоматически создаст каналы при выдаче роли

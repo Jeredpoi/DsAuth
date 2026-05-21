@@ -136,6 +136,12 @@ class ProofView(discord.ui.View):
         done.add_item(discord.ui.Button(label="❌ Отклонено", style=discord.ButtonStyle.danger,
                                         disabled=True, custom_id=f"done:r:{mid}"))
         await interaction.message.edit(embed=embed, view=done)
+
+        # Лог отклонения
+        server = get_server_for_member(interaction.user)
+        if server:
+            await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
+
         await interaction.response.send_message("❌ Форма отклонена.", ephemeral=True)
 
 
