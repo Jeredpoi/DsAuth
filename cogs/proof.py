@@ -27,6 +27,20 @@ async def rule_autocomplete(interaction: discord.Interaction, current: str):
     return results
 
 
+async def server_autocomplete(interaction: discord.Interaction, current: str):
+    cfg = interaction.client.cfg
+    from helpers import get_guild_cfg
+    guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
+    known = list(guild_cfg.get("servers", {}).keys())
+    known += list(guild_cfg.get("user_servers", {}).values())
+    seen, choices = set(), []
+    for s in known:
+        if s not in seen and current in s:
+            choices.append(app_commands.Choice(name=f"Сервер {s}", value=s))
+            seen.add(s)
+    return choices[:25]
+
+
 async def punishment_autocomplete(interaction: discord.Interaction, current: str):
     return [
         app_commands.Choice(name=p, value=p)
@@ -163,12 +177,13 @@ async def _post_form(
     form_text: str,
     evidence: discord.Attachment | None,
     with_buttons: bool = True,
+    server_override: str | None = None,
 ):
     guild = interaction.guild
     cfg = interaction.client.cfg
 
-    # 1. Пробуем канал конкретного сервера (по роли участника)
-    server = get_server_for_member(interaction.user, cfg)
+    # 1. Пробуем канал конкретного сервера (явный параметр или по роли)
+    server = server_override or get_server_for_member(interaction.user, cfg)
     proof_ch = None
 
     if server:
@@ -231,8 +246,9 @@ class ProofCog(commands.Cog):
         rule="Пункт правил (2.1, 3.1 и т.д.)",
         punishment="Выданное наказание",
         evidence="Скриншот доказательства (необязательно)",
+        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
     async def proof_cmd(
         self,
         interaction: discord.Interaction,
@@ -240,6 +256,7 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str,
         evidence: discord.Attachment | None = None,
+        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -256,15 +273,16 @@ class ProofCog(commands.Cog):
 
         form_text = build_form(self.bot.cfg, user, rule, punishment,
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence, with_buttons=False)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=False, server_override=server)
 
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
         user="Нарушитель", rule="Пункт правил",
         punishment="Наказание (по умолчанию: Бан 7-15 дней)",
         evidence="Скриншот (необязательно)",
+        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
     async def banform_cmd(
         self,
         interaction: discord.Interaction,
@@ -272,6 +290,7 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str = "Бан 7-15 дней",
         evidence: discord.Attachment | None = None,
+        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -295,20 +314,22 @@ class ProofCog(commands.Cog):
 
         form_text = build_form(self.bot.cfg, user, rule, punishment,
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence, with_buttons=True)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=True, server_override=server)
 
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
         user="Нарушитель", rule="Пункт правил",
         evidence="Скриншот (необязательно)",
+        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
     async def gbanform_cmd(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         rule: str,
         evidence: discord.Attachment | None = None,
+        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -332,7 +353,7 @@ class ProofCog(commands.Cog):
 
         form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка",
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence, with_buttons=True)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=True, server_override=server)
 
 
 async def setup(bot: commands.Bot):
