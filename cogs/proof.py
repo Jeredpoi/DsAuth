@@ -32,7 +32,7 @@ async def server_autocomplete(interaction: discord.Interaction, current: str):
     from helpers import get_guild_cfg
     guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
     known = list(guild_cfg.get("servers", {}).keys())
-    known += list(guild_cfg.get("user_servers", {}).values())
+    known += list(cfg.get("user_servers", {}).values())  # глобальные user_servers
     seen, choices = set(), []
     for s in known:
         if s not in seen and current in s:
@@ -99,7 +99,8 @@ class ProofView(discord.ui.View):
         embed = interaction.message.embeds[0]
         form_type = _form_type_from_title(embed.title or "")
         min_level = APPROVE_MIN_RANK.get(form_type, 2)
-        approver_level = get_member_rank_level(interaction.user)
+        approver = interaction.guild.get_member(interaction.user.id) or interaction.user
+        approver_level = get_member_rank_level(approver)
 
         if approver_level < min_level:
             needed = RANKS[min_level - 1]
@@ -117,7 +118,6 @@ class ProofView(discord.ui.View):
         command = build_command(punishment, user_id, rule_id)
 
         embed.color = discord.Color.green()
-        approver = interaction.guild.get_member(interaction.user.id) or interaction.user
         rank_display = next((r.name for r in reversed(getattr(approver, "roles", []))
                              if r.name in RANKS), "—")
         embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({rank_display})")
