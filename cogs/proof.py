@@ -459,7 +459,8 @@ class ProofCog(commands.Cog):
         user="Нарушитель",
         rule="Пункт правил (2.1, 3.1 и т.д.)",
         punishment="Выданное наказание",
-        evidence="Скриншот доказательства (необязательно)",
+        evidence="Скриншот доказательства (файл)",
+        evidence_url="Ссылка на доказательство (если нет файла)",
         server="Номер сервера (если не определяется автоматически)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
@@ -470,23 +471,25 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str,
         evidence: discord.Attachment | None = None,
+        evidence_url: str | None = None,
         server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
+        ev_url = evidence.url if evidence else (evidence_url or "")
         embed = _build_punishment_embed(
             interaction.user, user, rule, punishment, "proof",
-            evidence_url=evidence.url if evidence else "",
+            evidence_url=ev_url,
         )
-        form_text = build_form(self.bot.cfg, user, rule, punishment,
-                               evidence_url=evidence.url if evidence else "")
+        form_text = build_form(self.bot.cfg, user, rule, punishment, evidence_url=ev_url)
         await _post_form(interaction, embed, form_text, server_override=server)
 
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
         user="Нарушитель", rule="Пункт правил",
         punishment="Наказание (по умолчанию: Бан 7-15 дней)",
-        evidence="Скриншот (необязательно)",
+        evidence="Скриншот (файл)",
+        evidence_url="Ссылка на доказательство (если нет файла)",
         server="Номер сервера (если не определяется автоматически)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
@@ -497,6 +500,7 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str = "Бан 7-15 дней",
         evidence: discord.Attachment | None = None,
+        evidence_url: str | None = None,
         server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
@@ -505,18 +509,19 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
             return
 
+        ev_url = evidence.url if evidence else (evidence_url or "")
         embed = _build_punishment_embed(
             interaction.user, user, rule, punishment, "banform",
-            evidence_url=evidence.url if evidence else "",
+            evidence_url=ev_url,
         )
-        form_text = build_form(self.bot.cfg, user, rule, punishment,
-                               evidence_url=evidence.url if evidence else "")
+        form_text = build_form(self.bot.cfg, user, rule, punishment, evidence_url=ev_url)
         await _post_form(interaction, embed, form_text, server_override=server)
 
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
         user="Нарушитель", rule="Пункт правил",
-        evidence="Скриншот (необязательно)",
+        evidence="Скриншот (файл)",
+        evidence_url="Ссылка на доказательство (если нет файла)",
         server="Номер сервера (если не определяется автоматически)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
@@ -526,6 +531,7 @@ class ProofCog(commands.Cog):
         user: discord.Member,
         rule: str,
         evidence: discord.Attachment | None = None,
+        evidence_url: str | None = None,
         server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
@@ -534,12 +540,12 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
             return
 
+        ev_url = evidence.url if evidence else (evidence_url or "")
         embed = _build_punishment_embed(
             interaction.user, user, rule, "Глобальная блокировка", "gbanform",
-            evidence_url=evidence.url if evidence else "",
+            evidence_url=ev_url,
         )
-        form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка",
-                               evidence_url=evidence.url if evidence else "")
+        form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка", evidence_url=ev_url)
         await _post_form(interaction, embed, form_text, server_override=server)
 
 
