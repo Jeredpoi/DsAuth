@@ -156,8 +156,12 @@ class AuthCog(commands.Cog):
             await self._handle_reject(interaction, user_id)
 
     async def _handle_approve(self, interaction: discord.Interaction, user_id: int, rank: str | None):
-        # Только ЗГМ или ГМ могут одобрять
-        if get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
+        # Владелец сервера и владелец бота могут одобрять без ограничений по рангу
+        is_owner = (
+            interaction.user.id == interaction.guild.owner_id
+            or interaction.user.id == getattr(self.bot, "owner_id_cfg", 0)
+        )
+        if not is_owner and get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
             await interaction.response.send_message(
                 "❌ Одобрять заявки могут только **Заместитель главного модератора** или **Главный модератор**.",
                 ephemeral=True,
