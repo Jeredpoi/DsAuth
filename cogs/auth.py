@@ -204,6 +204,11 @@ class AuthCog(commands.Cog):
             # on_member_update автоматически создаст каналы при выдаче роли
             await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
 
+            # Сохраняем привязку user → server в конфиг
+            guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
+            guild_cfg.setdefault("user_servers", {})[str(member.id)] = server_num
+            save_config(self.bot.cfg)
+
         await self._disable_review(
             interaction, approved=True,
             label=f"✅ Одобрено: {interaction.user} → должность: {rank or '—'}, сервер: {server_num or '?'}"

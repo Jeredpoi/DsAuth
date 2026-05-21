@@ -120,7 +120,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "approved")
 
-        server = get_server_for_member(interaction.user)
+        server = get_server_for_member(interaction.user, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -148,7 +148,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "rejected")
 
-        server = get_server_for_member(interaction.user)
+        server = get_server_for_member(interaction.user, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -167,32 +167,39 @@ async def _post_form(
     guild = interaction.guild
     cfg = interaction.client.cfg
 
-    server = get_server_for_member(interaction.user)
+    # 1. Пробуем канал конкретного сервера (по роли участника)
+    server = get_server_for_member(interaction.user, cfg)
+    proof_ch = None
+
     if server:
         proof_ch = get_proof_channel(guild, cfg, server)
-        if not proof_ch:
-            # Каналы ещё не созданы — создаём автоматически
-            try:
-                await ensure_server_channels(guild, server, cfg)
-                proof_ch = get_proof_channel(guild, cfg, server)
-            except discord.Forbidden:
-                pass
-        if not proof_ch:
+
+    # 2. Запасной вариант: глобальный proof_channel_id из /setup
+    if not proof_ch:
+        guild_cfg_data = get_guild_cfg(cfg, guild.id)
+        proof_ch = guild.get_channel(guild_cfg_data.get("proof_channel_id", 0))
+
+    # 3. Ещё нет? Пробуем создать каналы для сервера автоматически
+    if not proof_ch and server:
+        try:
+            await ensure_server_channels(guild, server, cfg)
+            proof_ch = get_proof_channel(guild, cfg, server)
+        except discord.Forbidden:
+            pass
+
+    if not proof_ch:
+        if server:
             await interaction.followup.send(
-                f"❌ Не удалось найти или создать каналы для сервера **{server}**.\n"
-                f"Попросите владельца запустить `/setupserver {server}`.",
+                f"❌ Канал для форм не найден (сервер **{server}**).\n"
+                f"Попросите владельца запустить `/setupserver {server}` или настроить `/setup`.",
                 ephemeral=True,
             )
-            return
-    else:
-        guild_cfg = get_guild_cfg(cfg, guild.id)
-        proof_ch = guild.get_channel(guild_cfg.get("proof_channel_id", 0))
-        if not proof_ch:
+        else:
             await interaction.followup.send(
                 "❌ У вас нет роли сервера (1–90). Пройдите авторизацию или попросите выдать роль сервера.",
                 ephemeral=True,
             )
-            return
+        return
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
     review_role_id = guild_cfg.get("review_role_id", 0)

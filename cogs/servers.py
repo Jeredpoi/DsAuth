@@ -11,10 +11,17 @@ def is_server_role(name: str) -> bool:
     return name.isdigit() and 1 <= int(name) <= 90
 
 
-def get_server_for_member(member: discord.Member) -> str | None:
+def get_server_for_member(member: discord.Member, cfg: dict | None = None) -> str | None:
+    # Сначала проверяем роли участника
     for role in member.roles:
         if is_server_role(role.name):
             return role.name
+    # Запасной вариант: база user→server из конфига
+    if cfg is not None:
+        guild_cfg = get_guild_cfg(cfg, member.guild.id)
+        server = guild_cfg.get("user_servers", {}).get(str(member.id))
+        if server:
+            return server
     return None
 
 
