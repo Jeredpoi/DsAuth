@@ -182,8 +182,17 @@ async def _post_form(
     guild = interaction.guild
     cfg = interaction.client.cfg
 
+    # interaction.user может быть User (без .roles) — берём Member из кэша гильдии
+    member = guild.get_member(interaction.user.id) or interaction.user
+
     # 1. Пробуем канал конкретного сервера (явный параметр или по роли)
-    server = server_override or get_server_for_member(interaction.user, cfg)
+    server = server_override or get_server_for_member(member, cfg)
+
+    # Дополнительный fallback: user_servers в конфиге (если member без ролей)
+    if not server:
+        guild_cfg_fallback = get_guild_cfg(cfg, guild.id)
+        server = guild_cfg_fallback.get("user_servers", {}).get(str(interaction.user.id))
+
     proof_ch = None
 
     if server:
