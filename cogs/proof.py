@@ -1,9 +1,9 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from helpers import (
     RULES, PUNISHMENTS, build_form, fmt_date, date_end,
@@ -12,6 +12,8 @@ from helpers import (
 )
 from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel, ensure_server_channels
 from stats_db import record_form
+
+REMINDER_HOURS = 2
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -250,6 +252,65 @@ async def _post_form(
 class ProofCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._reminded: set[int] = set()
+        self.reminder_loop.start()
+
+    def cog_unload(self):
+        self.reminder_loop.cancel()
+
+    @tasks.loop(minutes=30)
+    async def reminder_loop(self):
+        now = discord.utils.utcnow()
+        cfg = self.bot.cfg
+        channels_to_check: list[discord.TextChannel] = []
+
+        for guild_cfg in cfg.get("guilds", {}).values():
+            # Глобальный proof канал гильдии
+            ch_id = guild_cfg.get("proof_channel_id", 0)
+            if ch_id:
+                ch = self.bot.get_channel(ch_id)
+                if isinstance(ch, discord.TextChannel):
+                    channels_to_check.append(ch)
+
+            # Серверные proof каналы
+            for srv_data in guild_cfg.get("servers", {}).values():
+                srv_ch_id = srv_data.get("proof", 0)
+                if srv_ch_id:
+                    ch = self.bot.get_channel(srv_ch_id)
+                    if isinstance(ch, discord.TextChannel):
+                        channels_to_check.append(ch)
+
+        cutoff = now - timedelta(days=7)
+        for ch in channels_to_check:
+            try:
+                async for msg in ch.history(limit=100, after=cutoff, oldest_first=True):
+                    if msg.id in self._reminded or not msg.embeds:
+                        continue
+                    # Форма ожидает если есть кнопка proof:approve
+                    pending = any(
+                        getattr(c, "custom_id", "") == "proof:approve"
+                        for row in msg.components
+                        for c in getattr(row, "children", [])
+                    )
+                    if not pending:
+                        continue
+                    age_hours = (now - msg.created_at).total_seconds() / 3600
+                    if age_hours >= REMINDER_HOURS:
+                        self._reminded.add(msg.id)
+                        guild_cfg = get_guild_cfg(cfg, ch.guild.id)
+                        role_id = guild_cfg.get("review_role_id", 0)
+                        mention = f"<@&{role_id}>" if role_id else "⚠️"
+                        await ch.send(
+                            f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!",
+                            reference=msg,
+                            mention_author=False,
+                        )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    @reminder_loop.before_loop
+    async def before_reminder(self):
+        await self.bot.wait_until_ready()
 
     @app_commands.command(name="proof", description="Отправить доказательство нарушения")
     @app_commands.describe(

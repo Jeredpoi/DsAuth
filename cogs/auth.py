@@ -439,29 +439,20 @@ class AuthCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-        # Снимаем все роли должности и сервера
+        # Снимаем все роли должности и сервера, возвращаем "Не авторизован"
         roles_to_remove = [
             r for r in member.roles
             if r.name in RANKS or is_server_role(r.name)
         ]
-
         unverified = discord.utils.get(interaction.guild.roles, name=UNVERIFIED_ROLE_NAME)
-        if unverified and unverified not in member.roles:
-            roles_to_remove_set = set(roles_to_remove)
-            try:
-                if roles_to_remove:
-                    await member.remove_roles(*roles_to_remove, reason=f"Исключён: {interaction.user}")
+        try:
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason=f"Исключён: {interaction.user}")
+            if unverified and unverified not in member.roles:
                 await member.add_roles(unverified, reason="Исключён из команды модерации")
-            except discord.Forbidden:
-                await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
-                return
-        else:
-            try:
-                if roles_to_remove:
-                    await member.remove_roles(*roles_to_remove, reason=f"Исключён: {interaction.user}")
-            except discord.Forbidden:
-                await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
-                return
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
+            return
 
         # Удаляем из глобальной базы user_servers
         self.bot.cfg.get("user_servers", {}).pop(str(member.id), None)
