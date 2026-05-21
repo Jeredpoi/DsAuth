@@ -335,6 +335,9 @@ class AuthCog(commands.Cog):
         await interaction.followup.send("❌ Заявка отклонена.", ephemeral=True)
 
     async def _disable_review(self, interaction: discord.Interaction, approved: bool, label: str):
+        if not interaction.message.embeds:
+            await interaction.message.edit(view=None)
+            return
         embed = interaction.message.embeds[0]
         embed.color = discord.Color.green() if approved else discord.Color.red()
         embed.set_footer(text=label)

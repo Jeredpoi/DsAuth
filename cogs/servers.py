@@ -89,7 +89,7 @@ async def _ensure_common_channels(guild: discord.Guild):
             await guild.create_voice_channel(name=vc_name, category=category)
 
 
-async def _ensure_monitoring_category(guild: discord.Guild):
+async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
     everyone = guild.default_role
     all_mod_roles = [r for r in guild.roles if r.name in RANKS]
     lead_roles    = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
@@ -123,9 +123,14 @@ async def _ensure_monitoring_category(guild: discord.Guild):
         ("🔔-авторизации",   "Журнал авторизаций, кандидатов и кик-логов",     readonly_all),
         ("📋-журнал-команд", "Лог административных действий",                   readonly_lead),
     ]
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    monitoring_ids = guild_cfg.setdefault("monitoring", {})
     for name, topic, ow in channels:
-        if not discord.utils.get(guild.text_channels, name=name, category=category):
-            await guild.create_text_channel(name=name, category=category, topic=topic, overwrites=ow)
+        ch = discord.utils.get(guild.text_channels, name=name, category=category)
+        if not ch:
+            ch = await guild.create_text_channel(name=name, category=category, topic=topic, overwrites=ow)
+        monitoring_ids[name] = ch.id
+    save_config(cfg)
 
 
 async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -> dict:
@@ -149,7 +154,8 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         }
         category = await guild.create_category(name=cat_name, overwrites=cat_ow)
 
-    channel_ids = {}
+    # Preserve existing IDs; only overwrite keys we explicitly create/find
+    channel_ids = guild_cfg.get("servers", {}).get(server, {}).copy()
 
     ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
     if not ch:
@@ -233,28 +239,34 @@ class DeleteCategoryView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         category = discord.utils.get(guild.categories, name=self.server)
-        deleted = 0
+        deleted = failed = 0
+        category_deleted = False
+
         if category:
             for ch in list(category.channels):
                 try:
                     await ch.delete(reason=f"manage-category delete: {self.server}")
                     deleted += 1
-                except discord.Forbidden:
-                    pass
+                except (discord.Forbidden, discord.HTTPException):
+                    failed += 1
             try:
                 await category.delete(reason=f"manage-category delete: {self.server}")
-            except discord.Forbidden:
+                category_deleted = True
+            except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        # Remove from config
-        guild_cfg = get_guild_cfg(self.cfg, guild.id)
-        guild_cfg.get("servers", {}).pop(self.server, None)
-        save_config(self.cfg)
+        if category_deleted:
+            guild_cfg = get_guild_cfg(self.cfg, guild.id)
+            guild_cfg.get("servers", {}).pop(self.server, None)
+            save_config(self.cfg)
 
         self.stop()
-        await interaction.followup.send(
-            f"🗑️ Категория **{self.server}** удалена ({deleted} каналов).", ephemeral=True
-        )
+        msg = f"🗑️ Категория **{self.server}** удалена ({deleted} каналов)."
+        if failed:
+            msg += f"\n⚠️ {failed} каналов не удалены (нет прав)."
+        if not category_deleted and category:
+            msg = f"❌ Не удалось удалить категорию **{self.server}** (нет прав)."
+        await interaction.followup.send(msg, ephemeral=True)
 
     @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -352,7 +364,7 @@ class ServersCog(commands.Cog):
         elif action == "monitoring":
             await interaction.response.defer(ephemeral=True)
             try:
-                await _ensure_monitoring_category(interaction.guild)
+                await _ensure_monitoring_category(interaction.guild, self.bot.cfg)
                 await interaction.followup.send(
                     f"✅ Категория **{MONITORING_CATEGORY}** создана/обновлена.", ephemeral=True
                 )

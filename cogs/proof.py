@@ -362,9 +362,10 @@ async def _post_form(
 
     if not proof_ch:
         if server:
+            ch_label = "банов" if is_ban else "наказаний"
             await interaction.followup.send(
-                f"❌ Канал для форм не найден (сервер **{server}**).\n"
-                f"Попросите владельца запустить `/setupserver {server}` или настроить `/setup`.",
+                f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
+                f"Запустите `/manage-category action:create_missing server:{server}`.",
                 ephemeral=True,
             )
         else:
@@ -418,12 +419,13 @@ class ProofCog(commands.Cog):
                     seen_ids.add(ch_id)
 
             for srv_data in guild_cfg.get("servers", {}).values():
-                srv_ch_id = srv_data.get("proof", 0)
-                if srv_ch_id and srv_ch_id not in seen_ids:
-                    ch = self.bot.get_channel(srv_ch_id)
-                    if isinstance(ch, discord.TextChannel):
-                        channels_to_check.append(ch)
-                        seen_ids.add(srv_ch_id)
+                for key in ("proof", "banform"):
+                    srv_ch_id = srv_data.get(key, 0)
+                    if srv_ch_id and srv_ch_id not in seen_ids:
+                        ch = self.bot.get_channel(srv_ch_id)
+                        if isinstance(ch, discord.TextChannel):
+                            channels_to_check.append(ch)
+                            seen_ids.add(srv_ch_id)
 
         if len(self._reminded) > 10_000:
             self._reminded.clear()

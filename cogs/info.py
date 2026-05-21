@@ -118,10 +118,15 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
             color=ANNOUNCE_COLOR,
         )
         embed.set_footer(text=f"Объявление от {interaction.user} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')} UTC")
-        await self.announce_channel.send(embed=embed)
-        await interaction.response.send_message(
-            f"✅ Объявление опубликовано в {self.announce_channel.mention}.", ephemeral=True
-        )
+        try:
+            await self.announce_channel.send(embed=embed)
+            await interaction.response.send_message(
+                f"✅ Объявление опубликовано в {self.announce_channel.mention}.", ephemeral=True
+            )
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "❌ Канал объявлений недоступен или был удалён.", ephemeral=True
+            )
 
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
@@ -263,7 +268,7 @@ class InfoCog(commands.Cog):
             await msg.edit(embed=_build_rules_embed())
         except (discord.NotFound, discord.HTTPException):
             msg = await ch.send(embed=_build_rules_embed())
-            guild_cfg["info_channels"]["rules_msg_id"] = msg.id
+            guild_cfg.setdefault("info_channels", {})["rules_msg_id"] = msg.id
             save_config(self.bot.cfg)
 
         await interaction.followup.send(f"✅ Правила обновлены в {ch.mention}.", ephemeral=True)
