@@ -53,13 +53,16 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def _is_owner(self, user_id: int) -> bool:
-        return user_id == getattr(self.bot, "owner_id_cfg", 0)
+    def _is_owner(self, interaction: discord.Interaction) -> bool:
+        uid = interaction.user.id
+        global_owner = getattr(self.bot, "owner_id_cfg", 0)
+        guild_owner = interaction.guild.owner_id if interaction.guild else 0
+        return uid in (global_owner, guild_owner)
 
     # ─── /sync ────────────────────────────────────────────────────────────
     @app_commands.command(name="sync", description="Синхронизировать команды на этом сервере")
     async def sync_slash(self, interaction: discord.Interaction):
-        if not self._is_owner(interaction.user.id) and not await self.bot.is_owner(interaction.user):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
@@ -80,7 +83,7 @@ class AdminCog(commands.Cog):
         review_role: discord.Role | None = None,
         moderator_nick: str | None = None,
     ):
-        if not self._is_owner(interaction.user.id) and not await self.bot.is_owner(interaction.user):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
 
@@ -116,7 +119,7 @@ class AdminCog(commands.Cog):
         for key, label in FORM_TYPES.items()
     ])
     async def setform_cmd(self, interaction: discord.Interaction, type: str):
-        if not self._is_owner(interaction.user.id) and not await self.bot.is_owner(interaction.user):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
 
@@ -132,7 +135,7 @@ class AdminCog(commands.Cog):
         for key, label in FORM_TYPES.items()
     ])
     async def showform_cmd(self, interaction: discord.Interaction, type: str):
-        if not self._is_owner(interaction.user.id) and not await self.bot.is_owner(interaction.user):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
 

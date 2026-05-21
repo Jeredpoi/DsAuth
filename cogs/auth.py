@@ -210,32 +210,34 @@ class AuthCog(commands.Cog):
             pass
 
     # ─── /setup-auth ───────────────────────────────────────────────────────
-    @app_commands.command(name="setup-auth", description="Настроить систему авторизации (только для владельца)")
-    @app_commands.describe(
-        auth_channel="Канал авторизации (куда постить кнопку)",
-        review_channel="Канал рассмотрения заявок (только для модераторов)",
-    )
-    async def setup_auth_cmd(
-        self,
-        interaction: discord.Interaction,
-        auth_channel: discord.TextChannel,
-        review_channel: discord.TextChannel,
-    ):
-        owner_id = getattr(self.bot, "owner_id_cfg", 0)
-        is_owner = interaction.user.id == owner_id or await self.bot.is_owner(interaction.user)
-        if not is_owner:
-            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+    @app_commands.command(name="setup-auth", description="Настроить систему авторизации на этом сервере")
+    async def setup_auth_cmd(self, interaction: discord.Interaction):
+        guild = interaction.guild
+
+        # Только владелец сервера или бота
+        if interaction.user.id != guild.owner_id and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
-        guild = interaction.guild
 
         guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
-        guild_cfg["auth_channel_id"] = auth_channel.id
-        guild_cfg["auth_review_channel_id"] = review_channel.id
-        save_config(self.bot.cfg)
 
-        # Создаём роль "Не авторизован" если нет
+        # Сохраняем владельца сервера в конфиг
+        guild_cfg["owner_id"] = guild.owner_id
+
+        # Проверка повторного запуска
+        existing_ch_id = guild_cfg.get("auth_channel_id", 0)
+        if existing_ch_id and guild.get_channel(existing_ch_id):
+            await interaction.followup.send(
+                "⚠️ Система авторизации уже настроена на этом сервере.\n"
+                "Все каналы и роли уже существуют.", ephemeral=True
+            )
+            return
+
+        everyone = guild.default_role
+
+        # 1. Роль "Не авторизован"
         unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
         if not unverified:
             unverified = await guild.create_role(
@@ -244,15 +246,74 @@ class AuthCog(commands.Cog):
                 reason="Системная роль авторизации",
             )
 
-        # Создаём роли должностей если нет
+        # 2. Роли должностей (синие)
         created_roles = []
         for rank in RANKS:
             if not discord.utils.get(guild.roles, name=rank):
-                await guild.create_role(name=rank, color=RANK_COLOR, hoist=True,
-                                        reason="Автосоздание ролей авторизации")
+                await guild.create_role(
+                    name=rank, color=RANK_COLOR, hoist=True,
+                    reason="Автосоздание ролей авторизации",
+                )
                 created_roles.append(rank)
 
-        # Очищаем старые сообщения бота и постим кнопку
+        # 3. Категория
+        category = discord.utils.get(guild.categories, name="🔐 Авторизация")
+        if not category:
+            cat_overwrites = {
+                everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                unverified: discord.PermissionOverwrite(view_channel=True),
+            }
+            category = await guild.create_category(
+                name="🔐 Авторизация",
+                overwrites=cat_overwrites,
+                reason="Категория авторизации",
+            )
+
+        # 4. Канал авторизации
+        auth_channel = discord.utils.get(guild.text_channels, name="авторизация")
+        if not auth_channel:
+            ch_overwrites = {
+                everyone: discord.PermissionOverwrite(
+                    view_channel=True, send_messages=False, read_message_history=True
+                ),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                unverified: discord.PermissionOverwrite(view_channel=True),
+            }
+            auth_channel = await guild.create_text_channel(
+                name="авторизация",
+                category=category,
+                overwrites=ch_overwrites,
+                topic="Нажмите кнопку для подачи заявки на авторизацию",
+                reason="Канал авторизации",
+            )
+
+        # 5. Канал заявок (только модераторы/администраторы)
+        review_channel = discord.utils.get(guild.text_channels, name="заявки-на-авторизацию")
+        if not review_channel:
+            rev_overwrites = {
+                everyone: discord.PermissionOverwrite(view_channel=False),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            for role in guild.roles:
+                if role.permissions.administrator and role != everyone:
+                    rev_overwrites[role] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True
+                    )
+            review_channel = await guild.create_text_channel(
+                name="заявки-на-авторизацию",
+                category=category,
+                overwrites=rev_overwrites,
+                topic="Заявки на авторизацию — только для модераторов",
+                reason="Канал рассмотрения заявок",
+            )
+
+        # Сохраняем ID каналов
+        guild_cfg["auth_channel_id"] = auth_channel.id
+        guild_cfg["auth_review_channel_id"] = review_channel.id
+        save_config(self.bot.cfg)
+
+        # 6. Постим embed с кнопкой
         await auth_channel.purge(limit=10, check=lambda m: m.author == guild.me)
         embed = discord.Embed(
             title="🔐 Авторизация",
@@ -267,13 +328,15 @@ class AuthCog(commands.Cog):
         await auth_channel.send(embed=embed, view=AuthButtonView())
 
         lines = [
-            "✅ **Система авторизации настроена:**",
+            "🎉 **Система авторизации настроена!**",
+            f"• Категория: **🔐 Авторизация**",
             f"• Канал авторизации: {auth_channel.mention}",
             f"• Канал заявок: {review_channel.mention}",
             f"• Роль новых участников: **{UNVERIFIED_ROLE_NAME}**",
+            f"• Владелец сервера сохранён в конфиг: <@{guild.owner_id}>",
         ]
         if created_roles:
-            lines.append(f"• Созданы роли: {', '.join(f'**{r}**' for r in created_roles)}")
+            lines.append(f"• Созданы должности: {', '.join(f'**{r}**' for r in created_roles)}")
 
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
