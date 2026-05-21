@@ -143,6 +143,7 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
         )
 
     leadership_roles = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
+    guild_cfg = get_guild_cfg(cfg, guild.id)
 
     cat_name = str(server)
     category = discord.utils.get(guild.categories, name=cat_name)
@@ -219,7 +220,6 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
 
     await _ensure_common_channels(guild)
 
-    guild_cfg = get_guild_cfg(cfg, guild.id)
     guild_cfg.setdefault("servers", {})[server] = channel_ids
     save_config(cfg)
 
@@ -233,6 +233,10 @@ class DeleteCategoryView(discord.ui.View):
         super().__init__(timeout=30)
         self.server = server
         self.cfg = cfg
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
 
     @discord.ui.button(label="Удалить", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -428,11 +432,20 @@ class ServersCog(commands.Cog):
         embed = discord.Embed(title="👥 Модераторы по серверам", color=0x2ECC71)
         for server_num in sorted(servers.keys(), key=int):
             mods_list = servers[server_num]
-            embed.add_field(
-                name=f"Сервер {server_num} ({len(mods_list)})",
-                value="\n".join(mods_list),
-                inline=False,
-            )
+            chunk: list[str] = []
+            chunk_len = 0
+            part = 1
+            for entry in mods_list:
+                line = entry + "\n"
+                if chunk_len + len(line) > 1024 and chunk:
+                    label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (продолжение)"
+                    embed.add_field(name=label, value="\n".join(chunk), inline=False)
+                    chunk, chunk_len, part = [], 0, part + 1
+                chunk.append(entry)
+                chunk_len += len(line)
+            if chunk:
+                label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (продолжение)"
+                embed.add_field(name=label, value="\n".join(chunk), inline=False)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 

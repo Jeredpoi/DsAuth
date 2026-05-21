@@ -121,6 +121,11 @@ class AdminCog(commands.Cog):
         guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
 
         if proof_channel:
+            if proof_channel.guild.id != interaction.guild_id:
+                await interaction.response.send_message(
+                    "❌ Канал доказательств должен принадлежать этому серверу.", ephemeral=True
+                )
+                return
             guild_cfg["proof_channel_id"] = proof_channel.id
         if review_role:
             guild_cfg["review_role_id"] = review_role.id

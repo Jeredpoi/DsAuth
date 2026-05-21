@@ -255,10 +255,11 @@ class AuthCog(commands.Cog):
                 )
 
         server_num = None
-        for field in interaction.message.embeds[0].fields:
-            if field.name == "Сервер":
-                server_num = field.value.strip()
-                break
+        if interaction.message.embeds:
+            for field in interaction.message.embeds[0].fields:
+                if field.name == "Сервер":
+                    server_num = field.value.strip()
+                    break
 
         role_error = None
         if server_num and server_num.isdigit():
@@ -396,12 +397,18 @@ class AuthCog(commands.Cog):
 
         created_roles = []
         for rank in RANKS:
-            if not discord.utils.get(guild.roles, name=rank):
+            existing = discord.utils.get(guild.roles, name=rank)
+            if not existing:
                 await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
                     reason="Автосоздание ролей авторизации",
                 )
                 created_roles.append(rank)
+            elif not existing.hoist:
+                try:
+                    await existing.edit(hoist=True, reason="Исправление: роль должна быть hoisted")
+                except discord.Forbidden:
+                    pass
 
         category = discord.utils.get(guild.categories, name="🔐 Авторизация")
         if not category:

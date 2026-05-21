@@ -14,7 +14,7 @@ DB_PATH = "bot_data.db"
 def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
     c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA journal_mode=WAL").fetchone()
     return c
 
 
