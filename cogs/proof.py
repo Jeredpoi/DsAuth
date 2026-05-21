@@ -11,7 +11,8 @@ from helpers import (
     APPROVE_MIN_RANK, RANKS,
 )
 from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel, ensure_server_channels
-from stats_db import record_form
+import db
+from db import record_form
 
 REMINDER_HOURS = 2
 
@@ -33,7 +34,7 @@ async def server_autocomplete(interaction: discord.Interaction, current: str):
     cfg = interaction.client.cfg
     guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
     known = list(guild_cfg.get("servers", {}).keys())
-    known += list(cfg.get("user_servers", {}).values())
+    known += list(db.all_user_servers().values())
     seen, choices = set(), []
     for s in known:
         if s not in seen and current in s:

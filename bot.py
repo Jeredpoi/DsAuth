@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from helpers import load_config
 from keep_alive import keep_alive
+import db
 
 load_dotenv()
 
@@ -19,8 +20,11 @@ intents.members = True
 intents.guilds = True
 intents.message_content = True
 
+db.init_db()
 bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, proxy=PROXY)
-bot.cfg = load_config()
+cfg = load_config()
+db.migrate_from_json(cfg)   # переносит user_servers и stats.json → SQLite (один раз)
+bot.cfg = cfg
 bot.owner_id_cfg = OWNER_ID
 
 

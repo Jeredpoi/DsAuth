@@ -1,9 +1,11 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
+from datetime import timedelta
 
-from helpers import save_config, get_guild_cfg, RANKS, UNVERIFIED_ROLE_NAME, get_member_rank_level
+from helpers import save_config, get_guild_cfg, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME, get_member_rank_level
 from cogs.servers import is_server_role
+import db
 
 RANK_ABBR: dict[str, str] = {
     "мм":  "Младший модератор",
@@ -14,7 +16,18 @@ RANK_ABBR: dict[str, str] = {
     "гм":  "Главный модератор",
 }
 
+RANK_ABBR_SHORT: dict[str, str] = {
+    "Младший модератор":                "ММ",
+    "Модератор":                        "М",
+    "Старший модератор":                "СМ",
+    "Куратор модерации":                "КМ",
+    "Заместитель главного модератора":  "ЗГМ",
+    "Главный модератор":                "ГМ",
+}
+
 AUTH_MIN_LEVEL = 5  # ЗГМ или ГМ могут одобрять
+AUTOKICK_DAYS  = 2  # кик неавторизованных через N дней
+AUTH_COOLDOWN_HOURS = 24  # cooldown после отклонения заявки
 
 RANK_COLOR = discord.Color.blue()
 
@@ -43,6 +56,15 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Антиспам: проверяем cooldown после отклонения
+        remaining = db.get_auth_cooldown_remaining(interaction.user.id)
+        if remaining > 0:
+            h, m = divmod(remaining // 60, 60)
+            await interaction.response.send_message(
+                f"❌ Повторная заявка доступна через **{h}ч {m}м**.", ephemeral=True
+            )
+            return
+
         server_val = self.server.value.strip()
         if not server_val.isdigit() or not (1 <= int(server_val) <= 90):
             await interaction.response.send_message(
@@ -80,7 +102,6 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
         embed.set_footer(text="Ожидает решения...")
 
-        # Пинг ЗГМ/ГМ
         ping_roles = [r for r in interaction.guild.roles
                       if r.name in ("Заместитель главного модератора", "Главный модератор")]
         ping_text = " ".join(r.mention for r in ping_roles) if ping_roles else None
@@ -109,6 +130,15 @@ class AuthButtonView(discord.ui.View):
         if not unverified or unverified not in interaction.user.roles:
             await interaction.response.send_message("✅ Вы уже авторизованы!", ephemeral=True)
             return
+
+        remaining = db.get_auth_cooldown_remaining(interaction.user.id)
+        if remaining > 0:
+            h, m = divmod(remaining // 60, 60)
+            await interaction.response.send_message(
+                f"❌ Повторная заявка доступна через **{h}ч {m}м**.", ephemeral=True
+            )
+            return
+
         await interaction.response.send_modal(AuthModal(interaction.client))
 
 
@@ -138,6 +168,40 @@ class AuthReviewView(discord.ui.View):
 class AuthCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.autokick_loop.start()
+
+    def cog_unload(self):
+        self.autokick_loop.cancel()
+
+    # ─── Автокик неавторизованных ─────────────────────────────────────────
+    @tasks.loop(hours=1)
+    async def autokick_loop(self):
+        cutoff = discord.utils.utcnow() - timedelta(days=AUTOKICK_DAYS)
+        for guild in self.bot.guilds:
+            guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
+            if not guild_cfg.get("auth_channel_id"):
+                continue
+            unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
+            if not unverified:
+                continue
+            for member in list(unverified.members):
+                if member.joined_at and member.joined_at < cutoff:
+                    try:
+                        await member.send(
+                            f"👋 Вы были исключены с сервера **{guild.name}**, "
+                            f"так как не прошли авторизацию в течение {AUTOKICK_DAYS} дней.\n"
+                            f"Для вступления повторно вступите на сервер и подайте заявку."
+                        )
+                    except discord.Forbidden:
+                        pass
+                    try:
+                        await guild.kick(member, reason=f"Не авторизован за {AUTOKICK_DAYS} дня")
+                    except discord.Forbidden:
+                        pass
+
+    @autokick_loop.before_loop
+    async def before_autokick(self):
+        await self.bot.wait_until_ready()
 
     # ─── Обработка кнопок из AuthReviewView ───────────────────────────────
     @commands.Cog.listener()
@@ -156,7 +220,6 @@ class AuthCog(commands.Cog):
             await self._handle_reject(interaction, user_id)
 
     async def _handle_approve(self, interaction: discord.Interaction, user_id: int, rank: str | None):
-        # Владелец сервера и владелец бота могут одобрять без ограничений по рангу
         is_owner = (
             interaction.user.id == interaction.guild.owner_id
             or interaction.user.id == getattr(self.bot, "owner_id_cfg", 0)
@@ -213,10 +276,21 @@ class AuthCog(commands.Cog):
             except Exception as e:
                 role_error = f"❌ Ошибка при выдаче роли сервера: {e}"
 
-            self.bot.cfg.setdefault("user_servers", {})[str(member.id)] = server_num
-            save_config(self.bot.cfg)
+            db.set_user_server(member.id, server_num, rank or "")
+            db.clear_auth_cooldown(member.id)
+
         elif rank_role:
             await member.add_roles(rank_role, reason=f"Авторизован: {interaction.user}")
+            db.clear_auth_cooldown(member.id)
+
+        # Автоник: [СМ | 50] Имя
+        if rank and server_num:
+            abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
+            new_nick = f"[{abbr} | {server_num}] {member.display_name}"[:32]
+            try:
+                await member.edit(nick=new_nick, reason="Автоник при авторизации")
+            except discord.Forbidden:
+                pass
 
         await self._disable_review(
             interaction, approved=True,
@@ -240,6 +314,9 @@ class AuthCog(commands.Cog):
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
         await interaction.response.defer(ephemeral=True)
         member = interaction.guild.get_member(user_id)
+
+        db.set_auth_cooldown(user_id)  # 24ч cooldown
+
         await self._disable_review(
             interaction, approved=False,
             label=f"❌ Отклонено: {interaction.user}"
@@ -247,7 +324,8 @@ class AuthCog(commands.Cog):
         if member:
             try:
                 await member.send(
-                    f"😔 Ваша заявка на **{interaction.guild.name}** была отклонена."
+                    f"😔 Ваша заявка на **{interaction.guild.name}** была отклонена.\n"
+                    f"Повторную заявку можно подать через **{AUTH_COOLDOWN_HOURS} часов**."
                 )
             except discord.Forbidden:
                 pass
@@ -283,7 +361,6 @@ class AuthCog(commands.Cog):
     async def setup_auth_cmd(self, interaction: discord.Interaction):
         guild = interaction.guild
 
-        # Только владелец сервера или бота
         if interaction.user.id != guild.owner_id and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
             return
@@ -291,11 +368,8 @@ class AuthCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
-
-        # Сохраняем владельца сервера в конфиг
         guild_cfg["owner_id"] = guild.owner_id
 
-        # Проверка повторного запуска
         existing_ch_id = guild_cfg.get("auth_channel_id", 0)
         if existing_ch_id and guild.get_channel(existing_ch_id):
             await interaction.followup.send(
@@ -306,7 +380,6 @@ class AuthCog(commands.Cog):
 
         everyone = guild.default_role
 
-        # 1. Роль "Не авторизован"
         unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
         if not unverified:
             unverified = await guild.create_role(
@@ -315,7 +388,6 @@ class AuthCog(commands.Cog):
                 reason="Системная роль авторизации",
             )
 
-        # 2. Роли должностей (синие)
         created_roles = []
         for rank in RANKS:
             if not discord.utils.get(guild.roles, name=rank):
@@ -325,7 +397,6 @@ class AuthCog(commands.Cog):
                 )
                 created_roles.append(rank)
 
-        # 3. Категория
         category = discord.utils.get(guild.categories, name="🔐 Авторизация")
         if not category:
             cat_overwrites = {
@@ -339,7 +410,6 @@ class AuthCog(commands.Cog):
                 reason="Категория авторизации",
             )
 
-        # 4. Канал авторизации
         auth_channel = discord.utils.get(guild.text_channels, name="авторизация")
         if not auth_channel:
             ch_overwrites = {
@@ -357,7 +427,6 @@ class AuthCog(commands.Cog):
                 reason="Канал авторизации",
             )
 
-        # 5. Канал заявок (только модераторы/администраторы)
         review_channel = discord.utils.get(guild.text_channels, name="заявки-на-авторизацию")
         if not review_channel:
             rev_overwrites = {
@@ -377,12 +446,10 @@ class AuthCog(commands.Cog):
                 reason="Канал рассмотрения заявок",
             )
 
-        # Сохраняем ID каналов
         guild_cfg["auth_channel_id"] = auth_channel.id
         guild_cfg["auth_review_channel_id"] = review_channel.id
         save_config(self.bot.cfg)
 
-        # 6. Постим embed с кнопкой
         await auth_channel.purge(limit=10, check=lambda m: m.author == guild.me)
         embed = discord.Embed(
             title="🔐 Авторизация",
@@ -402,7 +469,7 @@ class AuthCog(commands.Cog):
             f"• Канал авторизации: {auth_channel.mention}",
             f"• Канал заявок: {review_channel.mention}",
             f"• Роль новых участников: **{UNVERIFIED_ROLE_NAME}**",
-            f"• Владелец сервера сохранён в конфиг: <@{guild.owner_id}>",
+            f"• Автокик неавторизованных: через **{AUTOKICK_DAYS} дня**",
         ]
         if created_roles:
             lines.append(f"• Созданы должности: {', '.join(f'**{r}**' for r in created_roles)}")
@@ -444,8 +511,13 @@ class AuthCog(commands.Cog):
             await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
             return
 
-        self.bot.cfg.get("user_servers", {}).pop(str(member.id), None)
-        save_config(self.bot.cfg)
+        # Сбрасываем ник
+        try:
+            await member.edit(nick=None, reason="Dismiss: сброс ника")
+        except discord.Forbidden:
+            pass
+
+        db.remove_user_server(member.id)
 
         farewell = (
             f"👋 Вы были исключены из команды модерации **{interaction.guild.name}**.\n"

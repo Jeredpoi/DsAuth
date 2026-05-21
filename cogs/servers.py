@@ -12,16 +12,11 @@ def is_server_role(name: str) -> bool:
 
 
 def get_server_for_member(member, cfg: dict | None = None) -> str | None:
-    # Безопасно: работает и с Member (есть .roles) и с User (нет .roles)
     for role in getattr(member, "roles", []):
         if is_server_role(role.name):
             return role.name
-    # Глобальная база user_id → server (работает на любом Discord-сервере)
-    if cfg is not None:
-        server = cfg.get("user_servers", {}).get(str(member.id))
-        if server:
-            return server
-    return None
+    from db import get_user_server
+    return get_user_server(member.id)
 
 
 def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:

@@ -65,7 +65,6 @@ DEFAULT_CONFIG: dict = {
         "general": DEFAULT_TEMPLATE,
         "oral": "", "warn": "", "mute": "", "ban": "", "gban": "",
     },
-    "user_servers": {},
     "guilds": {},
 }
 
@@ -83,16 +82,17 @@ def load_config() -> dict:
             data = json.load(f)
         data.setdefault("moderator_nick", DEFAULT_CONFIG["moderator_nick"])
         data.setdefault("templates", DEFAULT_CONFIG["templates"].copy())
-        data.setdefault("user_servers", {})
         data.setdefault("guilds", {})
         for k, v in DEFAULT_CONFIG["templates"].items():
             data["templates"].setdefault(k, v)
         for rule_id, rule_text in data.get("rules", {}).items():
             RULES[rule_id] = rule_text
-        # Миграция: переносим user_servers из guild-конфигов в глобальный
+        # Собираем user_servers из guild-конфигов для последующей миграции в SQLite
+        merged = data.pop("user_servers", {})
         for g_cfg in data["guilds"].values():
             for uid, srv in g_cfg.pop("user_servers", {}).items():
-                data["user_servers"].setdefault(uid, srv)
+                merged.setdefault(uid, srv)
+        data["user_servers"] = merged   # bot.py передаст это в migrate_from_json
         return data
     return {
         "moderator_nick": DEFAULT_CONFIG["moderator_nick"],

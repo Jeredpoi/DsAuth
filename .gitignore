@@ -6,3 +6,5 @@ __pycache__/
 venv/
 config.json
 stats.json
+stats.json.bak
+bot_data.db
