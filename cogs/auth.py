@@ -16,9 +16,9 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         max_length=64,
     )
     server = discord.ui.TextInput(
-        label="Ваш сервер",
-        placeholder="Например: 49-й, Хабаровск, BlackRussia...",
-        max_length=64,
+        label="Номер сервера (1–90)",
+        placeholder="Введите цифру, например: 49",
+        max_length=3,
     )
     rank = discord.ui.TextInput(
         label="Ваша должность",
@@ -31,6 +31,13 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        server_val = self.server.value.strip()
+        if not server_val.isdigit() or not (1 <= int(server_val) <= 90):
+            await interaction.response.send_message(
+                "❌ Такого сервера нет. Введите число от **1** до **90**.", ephemeral=True
+            )
+            return
+
         guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         review_ch_id = guild_cfg.get("auth_review_channel_id", 0)
 

@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from helpers import (
-    RULES, PUNISHMENTS, build_form, fmt_date,
+    RULES, PUNISHMENTS, build_form, fmt_date, date_end,
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
@@ -150,8 +150,8 @@ async def _post_form(
     embed: discord.Embed,
     form_text: str,
     evidence: discord.Attachment | None,
+    with_buttons: bool = True,
 ):
-    """Постит форму в канал сервера или в настроенный proof-канал."""
     guild = interaction.guild
     cfg = interaction.client.cfg
 
@@ -173,7 +173,8 @@ async def _post_form(
     review_role_id = guild_cfg.get("review_role_id", 0)
     mention = f"<@&{review_role_id}>" if review_role_id else None
 
-    await proof_ch.send(content=mention, embed=embed, view=ProofView())
+    view = ProofView() if with_buttons else discord.ui.View()
+    await proof_ch.send(content=mention, embed=embed, view=view)
 
     try:
         await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
@@ -208,20 +209,23 @@ class ProofCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         rule_text = RULES.get(rule, rule)
-        embed = discord.Embed(title="📋 Доказательство нарушения", color=0x3498DB, timestamp=datetime.now())
+        now = datetime.now()
+        embed = discord.Embed(title="📋 Доказательство нарушения", color=0x3498DB, timestamp=now)
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
-        embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=True)
-        embed.add_field(name="Наказание", value=punishment, inline=True)
-        embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Дата", value=fmt_date(datetime.now()), inline=True)
+        embed.add_field(name="👤 Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+        embed.add_field(name="⚖️ Наказание", value=punishment, inline=True)
+        embed.add_field(name="​", value="​", inline=True)
+        embed.add_field(name="📖 Пункт правил", value=f"`{rule}` — {rule_text}", inline=False)
+        embed.add_field(name="📅 Выдано", value=fmt_date(now), inline=True)
+        embed.add_field(name="🗓️ Снятие", value=date_end(punishment), inline=True)
+        embed.add_field(name="🛡️ Модератор", value=interaction.user.mention, inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
-        embed.set_footer(text="Ожидает одобрения...")
+        embed.set_footer(text="✔ Доказательство зафиксировано")
 
         form_text = build_form(self.bot.cfg, user, rule, punishment,
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=False)
 
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
@@ -240,19 +244,23 @@ class ProofCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=datetime.now())
+        now = datetime.now()
+        embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=now)
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
-        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=True)
-        embed.add_field(name="Наказание", value=punishment, inline=True)
-        embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
+        embed.add_field(name="👤 Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+        embed.add_field(name="⚖️ Наказание", value=punishment, inline=True)
+        embed.add_field(name="​", value="​", inline=True)
+        embed.add_field(name="📖 Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=False)
+        embed.add_field(name="📅 Выдано", value=fmt_date(now), inline=True)
+        embed.add_field(name="🗓️ Снятие", value=date_end(punishment), inline=True)
+        embed.add_field(name="🛡️ Модератор", value=interaction.user.mention, inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
-        embed.set_footer(text=f"Требует одобрения: Старший модератор+")
+        embed.set_footer(text="⏳ Требует одобрения: Старший модератор+")
 
         form_text = build_form(self.bot.cfg, user, rule, punishment,
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=True)
 
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
@@ -269,19 +277,23 @@ class ProofCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        embed = discord.Embed(title="🌐 Форма глобального бана", color=0x8B0000, timestamp=datetime.now())
+        now = datetime.now()
+        embed = discord.Embed(title="🌐 Форма глобального бана", color=0x8B0000, timestamp=now)
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
-        embed.add_field(name="Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=True)
-        embed.add_field(name="Наказание", value="Глобальная блокировка", inline=True)
-        embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
+        embed.add_field(name="👤 Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+        embed.add_field(name="⚖️ Наказание", value="Глобальная блокировка", inline=True)
+        embed.add_field(name="​", value="​", inline=True)
+        embed.add_field(name="📖 Пункт правил", value=f"`{rule}` — {RULES.get(rule, rule)}", inline=False)
+        embed.add_field(name="📅 Выдано", value=fmt_date(now), inline=True)
+        embed.add_field(name="🗓️ Снятие", value="Перманентно", inline=True)
+        embed.add_field(name="🛡️ Модератор", value=interaction.user.mention, inline=True)
         if evidence:
             embed.set_image(url=evidence.url)
-        embed.set_footer(text="Требует одобрения: Куратор модерации+")
+        embed.set_footer(text="⏳ Требует одобрения: Куратор модерации+")
 
         form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка",
                                evidence_url=evidence.url if evidence else "")
-        await _post_form(interaction, embed, form_text, evidence)
+        await _post_form(interaction, embed, form_text, evidence, with_buttons=True)
 
 
 async def setup(bot: commands.Bot):

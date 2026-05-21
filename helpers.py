@@ -113,6 +113,8 @@ def date_end(punishment: str) -> str:
     p = punishment.lower()
     if "мут" in p:
         return fmt_date(now + timedelta(minutes=90))
+    if "предупрежд" in p:
+        return fmt_date(now + timedelta(days=3))
     if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
         return fmt_date(now + timedelta(days=7))
     if "перманент" in p or "глобальн" in p:
