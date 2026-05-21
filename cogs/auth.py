@@ -177,22 +177,19 @@ class AuthCog(commands.Cog):
             await interaction.followup.send("❌ Пользователь покинул сервер.", ephemeral=True)
             return
 
-        # Убираем роль "Не авторизован"
         unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
         if unverified and unverified in member.roles:
             await member.remove_roles(unverified, reason="Авторизация одобрена")
 
-        # Выдаём роль должности (синяя)
+        rank_role = None
         if rank:
-            role = discord.utils.get(guild.roles, name=rank)
-            if not role:
-                role = await guild.create_role(
+            rank_role = discord.utils.get(guild.roles, name=rank)
+            if not rank_role:
+                rank_role = await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
                     reason="Автосоздание роли авторизации",
                 )
-            await member.add_roles(role, reason=f"Авторизован: {interaction.user}")
 
-        # Выдаём роль сервера и создаём каналы
         server_num = None
         for field in interaction.message.embeds[0].fields:
             if field.name == "Сервер":
@@ -208,15 +205,18 @@ class AuthCog(commands.Cog):
                         name=server_num, color=discord.Color.green(),
                         hoist=True, reason=f"Авторизация на сервер {server_num}",
                     )
-                await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
+                roles_to_add = [r for r in (rank_role, server_role) if r]
+                if roles_to_add:
+                    await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             except discord.Forbidden:
                 role_error = f"❌ Нет прав выдать роль **{server_num}** (Manage Roles / иерархия ролей)"
             except Exception as e:
                 role_error = f"❌ Ошибка при выдаче роли сервера: {e}"
 
-            # Сохраняем привязку user → server глобально (работает на любом сервере)
             self.bot.cfg.setdefault("user_servers", {})[str(member.id)] = server_num
             save_config(self.bot.cfg)
+        elif rank_role:
+            await member.add_roles(rank_role, reason=f"Авторизован: {interaction.user}")
 
         await self._disable_review(
             interaction, approved=True,
@@ -417,7 +417,7 @@ class AuthCog(commands.Cog):
     )
     async def dismiss_cmd(self, interaction: discord.Interaction, member: discord.Member, reason: str | None = None):
         invoker_level = get_member_rank_level(interaction.user)
-        if invoker_level < 5:
+        if invoker_level < AUTH_MIN_LEVEL:
             await interaction.response.send_message(
                 "❌ Команда доступна только **Заместителю главного модератора** и **Главному модератору**.",
                 ephemeral=True,
@@ -430,18 +430,6 @@ class AuthCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        # Прощальное сообщение в ЛС
-        farewell = (
-            f"👋 Вы были исключены из команды модерации **{interaction.guild.name}**.\n"
-            + (f"Причина: {reason}\n" if reason else "")
-            + "\nЖелаем всего наилучшего и успехов в дальнейшем! 🌟"
-        )
-        try:
-            await member.send(farewell)
-        except discord.Forbidden:
-            pass
-
-        # Снимаем все роли должности и сервера, возвращаем "Не авторизован"
         roles_to_remove = [
             r for r in member.roles
             if r.name in RANKS or is_server_role(r.name)
@@ -456,9 +444,18 @@ class AuthCog(commands.Cog):
             await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
             return
 
-        # Удаляем из глобальной базы user_servers
         self.bot.cfg.get("user_servers", {}).pop(str(member.id), None)
         save_config(self.bot.cfg)
+
+        farewell = (
+            f"👋 Вы были исключены из команды модерации **{interaction.guild.name}**.\n"
+            + (f"Причина: {reason}\n" if reason else "")
+            + "\nЖелаем всего наилучшего и успехов в дальнейшем! 🌟"
+        )
+        try:
+            await member.send(farewell)
+        except discord.Forbidden:
+            pass
 
         removed_names = ", ".join(r.name for r in roles_to_remove) or "нет"
         await interaction.followup.send(

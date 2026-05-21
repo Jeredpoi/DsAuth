@@ -31,7 +31,6 @@ async def rule_autocomplete(interaction: discord.Interaction, current: str):
 
 async def server_autocomplete(interaction: discord.Interaction, current: str):
     cfg = interaction.client.cfg
-    from helpers import get_guild_cfg
     guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
     known = list(guild_cfg.get("servers", {}).keys())
     known += list(cfg.get("user_servers", {}).values())  # глобальные user_servers
@@ -262,31 +261,38 @@ class ProofCog(commands.Cog):
     async def reminder_loop(self):
         now = discord.utils.utcnow()
         cfg = self.bot.cfg
+        seen_ids: set[int] = set()
         channels_to_check: list[discord.TextChannel] = []
 
         for guild_cfg in cfg.get("guilds", {}).values():
-            # Глобальный proof канал гильдии
             ch_id = guild_cfg.get("proof_channel_id", 0)
-            if ch_id:
+            if ch_id and ch_id not in seen_ids:
                 ch = self.bot.get_channel(ch_id)
                 if isinstance(ch, discord.TextChannel):
                     channels_to_check.append(ch)
+                    seen_ids.add(ch_id)
 
-            # Серверные proof каналы
             for srv_data in guild_cfg.get("servers", {}).values():
                 srv_ch_id = srv_data.get("proof", 0)
-                if srv_ch_id:
+                if srv_ch_id and srv_ch_id not in seen_ids:
                     ch = self.bot.get_channel(srv_ch_id)
                     if isinstance(ch, discord.TextChannel):
                         channels_to_check.append(ch)
+                        seen_ids.add(srv_ch_id)
+
+        # cap _reminded to prevent unbounded growth (keep only IDs still in the look-back window)
+        if len(self._reminded) > 10_000:
+            self._reminded.clear()
 
         cutoff = now - timedelta(days=7)
         for ch in channels_to_check:
+            guild_cfg = get_guild_cfg(cfg, ch.guild.id)
+            role_id = guild_cfg.get("review_role_id", 0)
+            mention = f"<@&{role_id}>" if role_id else "⚠️"
             try:
                 async for msg in ch.history(limit=100, after=cutoff, oldest_first=True):
                     if msg.id in self._reminded or not msg.embeds:
                         continue
-                    # Форма ожидает если есть кнопка proof:approve
                     pending = any(
                         getattr(c, "custom_id", "") == "proof:approve"
                         for row in msg.components
@@ -297,9 +303,6 @@ class ProofCog(commands.Cog):
                     age_hours = (now - msg.created_at).total_seconds() / 3600
                     if age_hours >= REMINDER_HOURS:
                         self._reminded.add(msg.id)
-                        guild_cfg = get_guild_cfg(cfg, ch.guild.id)
-                        role_id = guild_cfg.get("review_role_id", 0)
-                        mention = f"<@&{role_id}>" if role_id else "⚠️"
                         await ch.send(
                             f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!",
                             reference=msg,
