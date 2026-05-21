@@ -59,18 +59,20 @@ DEFAULT_TEMPLATE = (
     "7) Доказательства: {evidence}"
 )
 
-DEFAULT_CONFIG = {
-    "proof_channel_id": 0,
-    "review_role_id": 0,
+DEFAULT_CONFIG: dict = {
     "moderator_nick": "Ваш_Nick_Name",
     "templates": {
         "general": DEFAULT_TEMPLATE,
-        "oral":    "",
-        "warn":    "",
-        "mute":    "",
-        "ban":     "",
-        "gban":    "",
+        "oral": "", "warn": "", "mute": "", "ban": "", "gban": "",
     },
+    "guilds": {},
+}
+
+DEFAULT_GUILD_CFG: dict = {
+    "proof_channel_id": 0,
+    "review_role_id": 0,
+    "auth_channel_id": 0,
+    "auth_review_channel_id": 0,
 }
 
 
@@ -78,17 +80,23 @@ def load_config() -> dict:
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        # заполняем недостающие ключи дефолтами
-        for k, v in DEFAULT_CONFIG.items():
-            if k not in data:
-                data[k] = v
-        if "templates" not in data:
-            data["templates"] = DEFAULT_CONFIG["templates"].copy()
-        else:
-            for k, v in DEFAULT_CONFIG["templates"].items():
-                data["templates"].setdefault(k, v)
+        data.setdefault("moderator_nick", DEFAULT_CONFIG["moderator_nick"])
+        data.setdefault("templates", DEFAULT_CONFIG["templates"].copy())
+        data.setdefault("guilds", {})
+        for k, v in DEFAULT_CONFIG["templates"].items():
+            data["templates"].setdefault(k, v)
         return data
-    return DEFAULT_CONFIG.copy()
+    return {
+        "moderator_nick": DEFAULT_CONFIG["moderator_nick"],
+        "templates": DEFAULT_CONFIG["templates"].copy(),
+        "guilds": {},
+    }
+
+
+def get_guild_cfg(cfg: dict, guild_id: int) -> dict:
+    key = str(guild_id)
+    cfg["guilds"].setdefault(key, DEFAULT_GUILD_CFG.copy())
+    return cfg["guilds"][key]
 
 
 def save_config(data: dict):
@@ -125,6 +133,18 @@ def _punishment_type(punishment: str) -> str:
     if "бан" in p or "блокировк" in p or "обнул" in p:
         return "ban"
     return "general"
+
+
+RANKS: list[str] = [
+    "Младший модератор",
+    "Модератор",
+    "Старший модератор",
+    "Куратор модерации",
+    "Заместитель главного модератора",
+    "Главный модератор",
+]
+
+UNVERIFIED_ROLE_NAME = "Не авторизован"
 
 
 def build_form(cfg: dict, user: discord.Member, rule_id: str,

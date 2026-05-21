@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import RULES, PUNISHMENTS, build_form, fmt_date
+from helpers import RULES, PUNISHMENTS, build_form, fmt_date, get_guild_cfg
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -87,9 +87,9 @@ class ProofCog(commands.Cog):
     ):
         await interaction.response.defer(ephemeral=True)
 
-        cfg = self.bot.cfg
-        proof_ch_id = cfg.get("proof_channel_id", 0)
-        review_role_id = cfg.get("review_role_id", 0)
+        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
+        proof_ch_id = guild_cfg.get("proof_channel_id", 0)
+        review_role_id = guild_cfg.get("review_role_id", 0)
 
         if not proof_ch_id:
             await interaction.followup.send(
@@ -124,7 +124,7 @@ class ProofCog(commands.Cog):
         await proof_channel.send(content=mention, embed=embed, view=ProofView())
 
         form_text = build_form(
-            cfg, user, rule, punishment,
+            self.bot.cfg, user, rule, punishment,
             evidence_url=evidence.url if evidence else "",
         )
         try:
@@ -153,9 +153,8 @@ class ProofCog(commands.Cog):
         evidence: discord.Attachment | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
-        cfg = self.bot.cfg
         form_text = build_form(
-            cfg, user, rule, punishment,
+            self.bot.cfg, user, rule, punishment,
             evidence_url=evidence.url if evidence else "",
         )
         embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=datetime.now())

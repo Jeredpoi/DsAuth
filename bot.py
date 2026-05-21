@@ -28,6 +28,7 @@ async def main():
     async with bot:
         await bot.load_extension("cogs.proof")
         await bot.load_extension("cogs.admin")
+        await bot.load_extension("cogs.auth")
         await bot.start(TOKEN)
 
 

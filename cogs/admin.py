@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, DEFAULT_TEMPLATE
+from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg
 
 START_TIME = time.time()
 
@@ -85,23 +85,26 @@ class AdminCog(commands.Cog):
             return
 
         cfg = self.bot.cfg
+        guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
+
         if proof_channel:
-            cfg["proof_channel_id"] = proof_channel.id
+            guild_cfg["proof_channel_id"] = proof_channel.id
         if review_role:
-            cfg["review_role_id"] = review_role.id
+            guild_cfg["review_role_id"] = review_role.id
         if moderator_nick:
             cfg["moderator_nick"] = moderator_nick
         save_config(cfg)
 
-        ch = interaction.guild.get_channel(cfg.get("proof_channel_id", 0))
-        role_id = cfg.get("review_role_id", 0)
+        ch = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
+        role_id = guild_cfg.get("review_role_id", 0)
         lines = [
-            "✅ **Настройки сохранены:**",
+            "✅ **Настройки сохранены для этого сервера:**",
             f"• Канал доказательств: {ch.mention if ch else 'не задан'}",
             f"• Роль проверяющих: {'<@&' + str(role_id) + '>' if role_id else 'не задана'}",
             f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`",
             "",
             "Для настройки шаблонов форм используйте `/setform`.",
+            "Для настройки системы авторизации используйте `/setup-auth`.",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
