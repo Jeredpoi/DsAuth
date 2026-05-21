@@ -10,7 +10,7 @@ from helpers import (
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
-from cogs.servers import get_server_for_member, get_proof_channel, get_log_channel, ensure_server_channels
+from cogs.servers import get_server_for_member, get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels
 from db import record_form, all_user_servers
 
 REMINDER_HOURS = 2
@@ -336,12 +336,15 @@ async def _post_form(
     member = interaction.user
 
     server = server_override or get_server_for_member(member, cfg)
+    form_type = _form_type_from_title(embed.title or "")
+    is_ban = form_type in ("banform", "gbanform")
     proof_ch = None
 
     if server:
-        proof_ch = get_proof_channel(guild, cfg, server)
+        proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
+                    else get_proof_channel(guild, cfg, server))
 
-    if not proof_ch:
+    if not proof_ch and not is_ban:
         for g_cfg in cfg.get("guilds", {}).values():
             ch_id = g_cfg.get("proof_channel_id", 0)
             if ch_id:
@@ -352,7 +355,8 @@ async def _post_form(
     if not proof_ch and server:
         try:
             await ensure_server_channels(guild, server, cfg)
-            proof_ch = get_proof_channel(guild, cfg, server)
+            proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
+                        else get_proof_channel(guild, cfg, server))
         except discord.Forbidden:
             pass
 
@@ -374,7 +378,6 @@ async def _post_form(
     review_role_id = guild_cfg.get("review_role_id", 0)
     mention = f"<@&{review_role_id}>" if review_role_id else None
 
-    form_type = _form_type_from_title(embed.title or "")
     view = PunishmentView()
     await proof_ch.send(content=mention, embed=embed, view=view)
 
