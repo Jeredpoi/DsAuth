@@ -189,6 +189,39 @@ class ServersCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
 
+    @app_commands.command(name="cleanupserver", description="Удалить дублирующиеся каналы сервера")
+    @app_commands.describe(server="Номер сервера (1–90)")
+    async def cleanupserver_cmd(self, interaction: discord.Interaction, server: str):
+        if not (server.isdigit() and 1 <= int(server) <= 90):
+            await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
+            return
+
+        category = discord.utils.get(interaction.guild.categories, name=str(server))
+        if not category:
+            await interaction.response.send_message(f"❌ Категория **{server}** не найдена.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        deleted = 0
+        seen_names: dict[str, discord.abc.GuildChannel] = {}
+        channels_in_cat = list(category.channels)
+
+        for ch in channels_in_cat:
+            if ch.name in seen_names:
+                try:
+                    await ch.delete(reason=f"Cleanup: дубль канала {ch.name}")
+                    deleted += 1
+                except discord.Forbidden:
+                    pass
+            else:
+                seen_names[ch.name] = ch
+
+        if deleted:
+            await interaction.followup.send(f"🗑️ Удалено дублей: **{deleted}** в категории **{server}**.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"✅ Дублей в категории **{server}** не найдено.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ServersCog(bot))
