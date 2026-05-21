@@ -407,6 +407,74 @@ class AuthCog(commands.Cog):
 
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
+    # ─── /dismiss ─────────────────────────────────────────────────────────
+    @app_commands.command(name="dismiss", description="Исключить модератора по собственному желанию")
+    @app_commands.describe(
+        member="Модератор, покидающий команду",
+        reason="Причина (необязательно)",
+    )
+    async def dismiss_cmd(self, interaction: discord.Interaction, member: discord.Member, reason: str | None = None):
+        invoker_level = get_member_rank_level(interaction.user)
+        if invoker_level < 5:
+            await interaction.response.send_message(
+                "❌ Команда доступна только **Заместителю главного модератора** и **Главному модератору**.",
+                ephemeral=True,
+            )
+            return
+
+        if member.id == interaction.user.id:
+            await interaction.response.send_message("❌ Нельзя исключить самого себя.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Прощальное сообщение в ЛС
+        farewell = (
+            f"👋 Вы были исключены из команды модерации **{interaction.guild.name}**.\n"
+            + (f"Причина: {reason}\n" if reason else "")
+            + "\nЖелаем всего наилучшего и успехов в дальнейшем! 🌟"
+        )
+        try:
+            await member.send(farewell)
+        except discord.Forbidden:
+            pass
+
+        # Снимаем все роли должности и сервера
+        roles_to_remove = [
+            r for r in member.roles
+            if r.name in RANKS or is_server_role(r.name)
+        ]
+
+        unverified = discord.utils.get(interaction.guild.roles, name=UNVERIFIED_ROLE_NAME)
+        if unverified and unverified not in member.roles:
+            roles_to_remove_set = set(roles_to_remove)
+            try:
+                if roles_to_remove:
+                    await member.remove_roles(*roles_to_remove, reason=f"Исключён: {interaction.user}")
+                await member.add_roles(unverified, reason="Исключён из команды модерации")
+            except discord.Forbidden:
+                await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
+                return
+        else:
+            try:
+                if roles_to_remove:
+                    await member.remove_roles(*roles_to_remove, reason=f"Исключён: {interaction.user}")
+            except discord.Forbidden:
+                await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
+                return
+
+        # Удаляем из глобальной базы user_servers
+        self.bot.cfg.get("user_servers", {}).pop(str(member.id), None)
+        save_config(self.bot.cfg)
+
+        removed_names = ", ".join(r.name for r in roles_to_remove) or "нет"
+        await interaction.followup.send(
+            f"✅ **{member}** исключён из команды модерации.\n"
+            f"Сняты роли: {removed_names}\n"
+            f"Прощальное сообщение отправлено в ЛС.",
+            ephemeral=True,
+        )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AuthCog(bot))
