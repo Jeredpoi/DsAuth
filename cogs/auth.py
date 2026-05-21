@@ -2,7 +2,19 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from helpers import save_config, get_guild_cfg, RANKS, UNVERIFIED_ROLE_NAME
+from helpers import save_config, get_guild_cfg, RANKS, UNVERIFIED_ROLE_NAME, get_member_rank_level
+from cogs.servers import ensure_server_channels, SERVER_SET
+
+RANK_ABBR: dict[str, str] = {
+    "мм":  "Младший модератор",
+    "м":   "Модератор",
+    "см":  "Старший модератор",
+    "км":  "Куратор модерации",
+    "згм": "Заместитель главного модератора",
+    "гм":  "Главный модератор",
+}
+
+AUTH_MIN_LEVEL = 5  # ЗГМ или ГМ могут одобрять
 
 RANK_COLOR = discord.Color.blue()
 
@@ -38,6 +50,9 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             )
             return
 
+        rank_val = self.rank.value.strip()
+        rank_expanded = RANK_ABBR.get(rank_val.lower(), rank_val)
+
         guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         review_ch_id = guild_cfg.get("auth_review_channel_id", 0)
 
@@ -61,8 +76,8 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.add_field(name="Аккаунт создан",
                         value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
         embed.add_field(name="Никнейм", value=self.nickname.value, inline=False)
-        embed.add_field(name="Сервер", value=self.server.value, inline=True)
-        embed.add_field(name="Заявленная должность", value=self.rank.value, inline=True)
+        embed.add_field(name="Сервер", value=server_val, inline=True)
+        embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
         embed.set_footer(text="Ожидает решения...")
 
         view = AuthReviewView(member.id)
@@ -136,6 +151,14 @@ class AuthCog(commands.Cog):
             await self._handle_reject(interaction, user_id)
 
     async def _handle_approve(self, interaction: discord.Interaction, user_id: int, rank: str | None):
+        # Только ЗГМ или ГМ могут одобрять
+        if get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
+            await interaction.response.send_message(
+                "❌ Одобрять заявки могут только **Заместитель главного модератора** или **Главный модератор**.",
+                ephemeral=True,
+            )
+            return
+
         guild = interaction.guild
         member = guild.get_member(user_id)
 
@@ -159,21 +182,44 @@ class AuthCog(commands.Cog):
                 )
             await member.add_roles(role, reason=f"Авторизован: {interaction.user}")
 
+        # Выдаём роль сервера и создаём каналы
+        server_num = None
+        for field in interaction.message.embeds[0].fields:
+            if field.name == "Сервер":
+                server_num = field.value.strip()
+                break
+
+        if server_num and server_num.isdigit():
+            server_role = discord.utils.get(guild.roles, name=server_num)
+            if not server_role:
+                server_role = await guild.create_role(
+                    name=server_num, color=discord.Color.blue(),
+                    hoist=True, reason=f"Авторизация на сервер {server_num}",
+                )
+            await member.add_roles(server_role, reason=f"Авторизован на сервер {server_num}")
+            try:
+                await ensure_server_channels(guild, server_num, self.bot.cfg)
+            except discord.Forbidden:
+                pass
+
         await self._disable_review(
             interaction, approved=True,
-            label=f"✅ Одобрено: {interaction.user} → должность: {rank or '—'}"
+            label=f"✅ Одобрено: {interaction.user} → должность: {rank or '—'}, сервер: {server_num or '?'}"
         )
 
         try:
             await member.send(
                 f"🎉 Ваша заявка на **{guild.name}** одобрена!\n"
                 f"Должность: **{rank}**"
+                + (f"\nСервер: **{server_num}**" if server_num else "")
             )
         except discord.Forbidden:
             pass
 
         await interaction.response.send_message(
-            f"✅ {member.mention} авторизован как **{rank}**.", ephemeral=True
+            f"✅ {member.mention} авторизован как **{rank}**"
+            + (f", сервер **{server_num}**" if server_num else "") + ".",
+            ephemeral=True
         )
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):

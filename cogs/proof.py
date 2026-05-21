@@ -212,16 +212,12 @@ class ProofCog(commands.Cog):
         now = datetime.now()
         embed = discord.Embed(title="📋 Доказательство нарушения", color=0x3498DB, timestamp=now)
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="👤 Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
-        embed.add_field(name="⚖️ Наказание", value=punishment, inline=True)
-        embed.add_field(name="​", value="​", inline=True)
-        embed.add_field(name="📖 Пункт правил", value=f"`{rule}` — {rule_text}", inline=False)
-        embed.add_field(name="📅 Выдано", value=fmt_date(now), inline=True)
-        embed.add_field(name="🗓️ Снятие", value=date_end(punishment), inline=True)
-        embed.add_field(name="🛡️ Модератор", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Нарушитель", value=f"{user.mention} `{user.id}`", inline=False)
+        embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=False)
+        embed.add_field(name="Наказание", value=punishment, inline=False)
+        embed.add_field(name="Модератор", value=interaction.user.mention, inline=False)
         if evidence:
             embed.set_image(url=evidence.url)
-        embed.set_footer(text="✔ Доказательство зафиксировано")
 
         form_text = build_form(self.bot.cfg, user, rule, punishment,
                                evidence_url=evidence.url if evidence else "")
