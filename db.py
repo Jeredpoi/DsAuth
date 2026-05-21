@@ -12,8 +12,9 @@ DB_PATH = "bot_data.db"
 
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
     return c
 
 
@@ -39,6 +40,8 @@ def init_db():
             status    TEXT NOT NULL,
             ts        INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
+
+        CREATE INDEX IF NOT EXISTS idx_form_stats_mod ON form_stats(mod_id, ts);
         """)
 
 

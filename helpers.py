@@ -109,8 +109,9 @@ def get_guild_cfg(cfg: dict, guild_id: int) -> dict:
 
 
 def save_config(data: dict):
+    to_save = {k: v for k, v in data.items() if k != "user_servers"}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(to_save, f, indent=2, ensure_ascii=False)
 
 
 def fmt_date(dt: datetime) -> str:

@@ -185,7 +185,9 @@ class AuthCog(commands.Cog):
             if not unverified:
                 continue
             for member in list(unverified.members):
-                if member.joined_at and member.joined_at < cutoff:
+                if not (member.joined_at and member.joined_at < cutoff):
+                    continue
+                try:
                     try:
                         await member.send(
                             f"👋 Вы были исключены с сервера **{guild.name}**, "
@@ -194,10 +196,9 @@ class AuthCog(commands.Cog):
                         )
                     except discord.Forbidden:
                         pass
-                    try:
-                        await guild.kick(member, reason=f"Не авторизован за {AUTOKICK_DAYS} дня")
-                    except discord.Forbidden:
-                        pass
+                    await guild.kick(member, reason=f"Не авторизован за {AUTOKICK_DAYS} дня")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
     @autokick_loop.before_loop
     async def before_autokick(self):
@@ -286,7 +287,9 @@ class AuthCog(commands.Cog):
         # Автоник: [СМ | 50] Имя
         if rank and server_num:
             abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
-            new_nick = f"[{abbr} | {server_num}] {member.display_name}"[:32]
+            prefix = f"[{abbr} | {server_num}] "
+            display = member.display_name[:max(0, 32 - len(prefix))]
+            new_nick = prefix + display
             try:
                 await member.edit(nick=new_nick, reason="Автоник при авторизации")
             except discord.Forbidden:
