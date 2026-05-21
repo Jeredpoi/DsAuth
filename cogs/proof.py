@@ -117,7 +117,8 @@ class ProofView(discord.ui.View):
         command = build_command(punishment, user_id, rule_id)
 
         embed.color = discord.Color.green()
-        rank_display = next((r.name for r in reversed(interaction.user.roles)
+        approver = interaction.guild.get_member(interaction.user.id) or interaction.user
+        rank_display = next((r.name for r in reversed(getattr(approver, "roles", []))
                              if r.name in RANKS), "—")
         embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({rank_display})")
 
@@ -134,7 +135,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "approved")
 
-        server = get_server_for_member(interaction.user, interaction.client.cfg)
+        server = get_server_for_member(approver, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -147,8 +148,9 @@ class ProofView(discord.ui.View):
         data = _extract_embed_data(embed)
         mod_id = data.get("mod_id", 0)
 
+        rejecter = interaction.guild.get_member(interaction.user.id) or interaction.user
         embed.color = discord.Color.red()
-        rank_display = next((r.name for r in reversed(interaction.user.roles)
+        rank_display = next((r.name for r in reversed(getattr(rejecter, "roles", []))
                              if r.name in RANKS), "—")
         embed.set_footer(text=f"❌ Отклонено: {interaction.user} ({rank_display})")
 
@@ -162,7 +164,7 @@ class ProofView(discord.ui.View):
 
         record_form(mod_id, form_type, "rejected")
 
-        server = get_server_for_member(interaction.user, interaction.client.cfg)
+        server = get_server_for_member(rejecter, interaction.client.cfg)
         if server:
             await _post_to_log(interaction.guild, interaction.client.cfg, server, embed)
 
@@ -182,13 +184,13 @@ async def _post_form(
     guild = interaction.guild
     cfg = interaction.client.cfg
 
-    # interaction.user может быть User (без .roles) — берём Member из кэша гильдии
+    # Берём Member из кэша — у него актуальные роли; interaction.user может быть User
     member = guild.get_member(interaction.user.id) or interaction.user
 
-    # 1. Пробуем канал конкретного сервера (явный параметр или по роли)
+    # 1. Пробуем по ролям (Member) или конфигу (User/Member без guild в объекте)
     server = server_override or get_server_for_member(member, cfg)
 
-    # Дополнительный fallback: user_servers в конфиге (если member без ролей)
+    # Прямой fallback через guild.id — работает даже если member — User без .guild
     if not server:
         guild_cfg_fallback = get_guild_cfg(cfg, guild.id)
         server = guild_cfg_fallback.get("user_servers", {}).get(str(interaction.user.id))
