@@ -214,15 +214,29 @@ async def _post_form(
             pass
 
     if not proof_ch:
+        member_type = type(member).__name__
+        roles_preview = [r.name for r in getattr(member, "roles", [])]
+        guild_cfg_debug = get_guild_cfg(cfg, guild.id)
+        user_servers_debug = guild_cfg_debug.get("user_servers", {})
+        proof_id_debug = guild_cfg_debug.get("proof_channel_id", 0)
+        debug = (
+            f"\n\n🔧 Debug: member={member_type}, server={server!r}, "
+            f"roles={roles_preview}, "
+            f"user_id={interaction.user.id}, "
+            f"user_servers={user_servers_debug}, "
+            f"proof_channel_id={proof_id_debug}"
+        )
         if server:
             await interaction.followup.send(
                 f"❌ Канал для форм не найден (сервер **{server}**).\n"
-                f"Попросите владельца запустить `/setupserver {server}` или настроить `/setup`.",
+                f"Попросите владельца запустить `/setupserver {server}` или настроить `/setup`."
+                + debug,
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                "❌ У вас нет роли сервера (1–90). Пройдите авторизацию или попросите выдать роль сервера.",
+                "❌ У вас нет роли сервера (1–90). Пройдите авторизацию или попросите выдать роль сервера."
+                + debug,
                 ephemeral=True,
             )
         return
