@@ -1,6 +1,10 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
+import json
+import time
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 
@@ -9,12 +13,67 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PROXY = os.getenv("PROXY_URL")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+START_TIME = time.time()
 
-MEMBER_ROLE_NAME = "Участник"
-UNVERIFIED_ROLE_NAME = "Не верифицирован"
-AUTH_CATEGORY_NAME = "🔐 Авторизация"
-AUTH_CHANNEL_NAME = "авторизация"
-REVIEW_CHANNEL_NAME = "заявки-на-вход"
+CONFIG_PATH = "config.json"
+
+
+def load_config() -> dict:
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return {"proof_channel_id": 0, "review_role_id": 0, "moderator_nick": "Ваш_Nick_Name"}
+
+
+def save_config(data: dict):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+cfg = load_config()
+
+RULES: dict[str, str] = {
+    "2.1":  "Неадекватное поведение",
+    "2.2":  "Трансфер Discord валюты",
+    "2.3":  "Реклама",
+    "2.4":  "Возрастной контент",
+    "2.5":  "Персональная информация",
+    "2.6":  "Обман пользователей",
+    "2.7":  "Споры о политике и религии",
+    "2.8":  "Продажа за реальные деньги",
+    "2.9":  "Использование уязвимостей",
+    "2.10": "Вымогательство и попрошайничество",
+    "2.11": "Деструктивные действия",
+    "2.12": "Обход наказаний",
+    "2.13": "Оскорбления родных",
+    "2.14": "Распространение файлов",
+    "2.15": "Пропаганда наркотиков и терроризма",
+    "2.16": "Расизм, сексизм, нацизм",
+    "2.17": "Помехи работе модерации",
+    "2.18": "Провокация к нарушениям",
+    "2.19": "Угрозы",
+    "2.20": "Многократное нарушение",
+    "2.21": "Приватные комнаты с нарушениями",
+    "3.1":  "Флуд и спам",
+    "3.2":  "Упоминание без сообщения",
+    "3.3":  "Чрезмерный CapsLock",
+    "3.4":  "Злоупотребление символами",
+    "3.5":  "Многократное упоминание",
+    "4.1":  "Помехи общению",
+    "4.2":  "Программы для воспроизведения звуков",
+    "4.3":  "Плохо настроенный микрофон",
+    "4.4":  "Программы изменения голоса",
+}
+
+PUNISHMENTS = [
+    "Устное предупреждение",
+    "Предупреждение",
+    "Мут 90 минут",
+    "Бан 7-15 дней",
+    "Перманентная блокировка",
+    "Глобальная блокировка",
+    "Обнуление",
+]
 
 intents = discord.Intents.default()
 intents.members = True
@@ -23,434 +82,307 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, proxy=PROXY)
 
-pending: set[int] = set()
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def fmt_date(dt: datetime) -> str:
+    return dt.strftime("%d.%m.%Y")
 
 
-# ─── Persistent view for the auth button ────────────────────────────────────
+def date_end(punishment: str) -> str:
+    now = datetime.now()
+    p = punishment.lower()
+    if "мут" in p:
+        return fmt_date(now + timedelta(minutes=90))
+    if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
+        return fmt_date(now + timedelta(days=7))
+    if "перманент" in p or "глобальн" in p:
+        return "Перманентно"
+    return fmt_date(now)
 
-class PersistentAuthView(discord.ui.View):
+
+def build_form(mod_nick: str, user: discord.Member, rule_id: str, punishment: str,
+               evidence_url: str = "") -> str:
+    rule_text = RULES.get(rule_id, rule_id)
+    now = datetime.now()
+    proof_line = evidence_url if evidence_url else "(прикреплено выше)"
+    return (
+        f"1) Ваш Nick_Name: {mod_nick}\n"
+        f"2) ID Discord и тег нарушителя: {user.id} / {user}\n"
+        f"3) Пункт правил, который был нарушен: {rule_id} — {rule_text}\n"
+        f"4) Выданное наказание: {punishment}\n"
+        f"5) Дата выдачи: {fmt_date(now)}\n"
+        f"6) Дата снятия: {date_end(punishment)}\n"
+        f"7) Доказательства: {proof_line}"
+    )
+
+
+# ─── Autocomplete ─────────────────────────────────────────────────────────────
+
+async def rule_autocomplete(interaction: discord.Interaction, current: str):
+    results = []
+    for rule_id, rule_text in RULES.items():
+        label = f"{rule_id} — {rule_text}"
+        if current.lower() in label.lower():
+            results.append(app_commands.Choice(name=label[:100], value=rule_id))
+        if len(results) >= 25:
+            break
+    return results
+
+
+async def punishment_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=p, value=p)
+        for p in PUNISHMENTS
+        if current.lower() in p.lower()
+    ][:25]
+
+
+# ─── Proof buttons ────────────────────────────────────────────────────────────
+
+class ProofView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="🔐 Авторизоваться",
-        style=discord.ButtonStyle.primary,
-        custom_id="auth:request",
-    )
-    async def auth_request(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await handle_auth_request(interaction)
+    @discord.ui.button(label="✅ Одобрить", style=discord.ButtonStyle.success, custom_id="proof:approve")
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.set_footer(text=f"✅ Одобрено: {interaction.user} ({interaction.user.id})")
+        mid = interaction.message.id
+        done = discord.ui.View()
+        done.add_item(discord.ui.Button(label="✅ Одобрено", style=discord.ButtonStyle.success,
+                                        disabled=True, custom_id=f"done:a:{mid}"))
+        done.add_item(discord.ui.Button(label="❌ Отклонить", style=discord.ButtonStyle.danger,
+                                        disabled=True, custom_id=f"done:r:{mid}"))
+        await interaction.message.edit(embed=embed, view=done)
+        await interaction.response.send_message("✅ Доказательство одобрено.", ephemeral=True)
+
+    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger, custom_id="proof:reject")
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.set_footer(text=f"❌ Отклонено: {interaction.user} ({interaction.user.id})")
+        mid = interaction.message.id
+        done = discord.ui.View()
+        done.add_item(discord.ui.Button(label="✅ Одобрить", style=discord.ButtonStyle.success,
+                                        disabled=True, custom_id=f"done:a:{mid}"))
+        done.add_item(discord.ui.Button(label="❌ Отклонено", style=discord.ButtonStyle.danger,
+                                        disabled=True, custom_id=f"done:r:{mid}"))
+        await interaction.message.edit(embed=embed, view=done)
+        await interaction.response.send_message("❌ Доказательство отклонено.", ephemeral=True)
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+# ─── /proof ──────────────────────────────────────────────────────────────────
 
-async def get_or_create_unverified_role(guild: discord.Guild) -> discord.Role:
-    role = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
-    if not role:
-        role = await guild.create_role(
-            name=UNVERIFIED_ROLE_NAME,
-            color=discord.Color.light_grey(),
-            reason="Автосоздание роли системой авторизации",
-        )
-    return role
+@bot.tree.command(name="proof", description="Отправить доказательство нарушения")
+@app_commands.describe(
+    user="Нарушитель",
+    rule="Пункт правил (2.1, 3.1 и т.д.)",
+    punishment="Выданное наказание",
+    evidence="Скриншот доказательства",
+)
+@app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
+async def proof_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    rule: str,
+    punishment: str,
+    evidence: discord.Attachment | None = None,
+):
+    await interaction.response.defer(ephemeral=True)
 
+    proof_ch_id = cfg.get("proof_channel_id", 0)
+    review_role_id = cfg.get("review_role_id", 0)
 
-def make_review_embed(member: discord.Member) -> discord.Embed:
-    embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
-    embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-    embed.add_field(name="Пользователь", value=member.mention, inline=True)
-    embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
-    embed.add_field(
-        name="Аккаунт создан",
-        value=f"<t:{int(member.created_at.timestamp())}:D>",
-        inline=True,
-    )
-    if member.joined_at:
-        embed.add_field(
-            name="Вошёл на сервер",
-            value=f"<t:{int(member.joined_at.timestamp())}:R>",
-            inline=True,
-        )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="Ожидает решения модератора...")
-    return embed
-
-
-def make_review_view(user_id: int) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(
-        discord.ui.Button(
-            label="✅ Принять",
-            style=discord.ButtonStyle.success,
-            custom_id=f"auth:approve:{user_id}",
-        )
-    )
-    view.add_item(
-        discord.ui.Button(
-            label="❌ Отклонить",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"auth:reject:{user_id}",
-        )
-    )
-    return view
-
-
-def make_disabled_view(approved: bool) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(
-        discord.ui.Button(
-            label="✅ Принять",
-            style=discord.ButtonStyle.success,
-            disabled=True,
-            custom_id="done:approve",
-        )
-    )
-    view.add_item(
-        discord.ui.Button(
-            label="❌ Отклонить",
-            style=discord.ButtonStyle.danger,
-            disabled=True,
-            custom_id="done:reject",
-        )
-    )
-    return view
-
-
-# ─── Interaction handlers ────────────────────────────────────────────────────
-
-async def handle_auth_request(interaction: discord.Interaction):
-    member = interaction.user
-    guild = interaction.guild
-
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if member_role and member_role in member.roles:
-        await interaction.response.send_message(
-            "✅ Вы уже авторизованы!", ephemeral=True
-        )
+    if not proof_ch_id:
+        await interaction.followup.send("❌ Канал доказательств не настроен. Используйте `/setup`.", ephemeral=True)
         return
 
-    if member.id in pending:
-        await interaction.response.send_message(
-            "⏳ Ваша заявка уже рассматривается. Ожидайте решения модераторов.",
-            ephemeral=True,
-        )
+    proof_channel = interaction.guild.get_channel(proof_ch_id)
+    if not proof_channel:
+        await interaction.followup.send("❌ Канал не найден. Проверьте `/setup`.", ephemeral=True)
         return
 
-    review_channel = discord.utils.get(guild.text_channels, name=REVIEW_CHANNEL_NAME)
-    if not review_channel:
-        await interaction.response.send_message(
-            "❌ Ошибка конфигурации: канал заявок не найден. Обратитесь к администратору.",
-            ephemeral=True,
-        )
-        return
+    rule_text = RULES.get(rule, rule)
 
-    embed = make_review_embed(member)
-    view = make_review_view(member.id)
-    await review_channel.send(embed=embed, view=view)
-    pending.add(member.id)
-
-    await interaction.response.send_message(
-        "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
+    embed = discord.Embed(
+        title="📋 Доказательство нарушения",
+        color=0x3498DB,
+        timestamp=datetime.now(),
     )
+    embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+    embed.add_field(name="Нарушитель", value=f"{user.mention}\n`{user.id}`", inline=True)
+    embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=True)
+    embed.add_field(name="Наказание", value=punishment, inline=True)
+    embed.add_field(name="Модератор", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Дата", value=fmt_date(datetime.now()), inline=True)
 
+    if evidence:
+        embed.set_image(url=evidence.url)
 
-async def handle_approve(interaction: discord.Interaction, user_id: int):
-    guild = interaction.guild
-    member = guild.get_member(user_id)
+    embed.set_footer(text="Ожидает проверки...")
 
-    if not member:
-        await interaction.response.send_message(
-            "❌ Пользователь покинул сервер.", ephemeral=True
-        )
-        pending.discard(user_id)
-        await _finalize_review(interaction, approved=True, label="Покинул сервер")
-        return
+    mention = f"<@&{review_role_id}>" if review_role_id else None
+    await proof_channel.send(content=mention, embed=embed, view=ProofView())
 
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if not member_role:
-        member_role = await guild.create_role(
-            name=MEMBER_ROLE_NAME,
-            color=discord.Color.green(),
-            hoist=True,
-            reason="Автосоздание роли системой авторизации",
-        )
-
-    unverified_role = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
-    roles_to_remove = [unverified_role] if unverified_role and unverified_role in member.roles else []
-
-    await member.add_roles(member_role, reason=f"Авторизован модератором {interaction.user}")
-    if roles_to_remove:
-        await member.remove_roles(*roles_to_remove, reason="Верификация пройдена")
-
-    pending.discard(user_id)
-
-    embed = interaction.message.embeds[0]
-    embed.color = 0x2ECC71
-    embed.set_footer(
-        text=f"✅ Принят модератором {interaction.user} ({interaction.user.id})"
-    )
-    await interaction.message.edit(embed=embed, view=make_disabled_view(True))
-
+    # DM форма модератору
+    mod_nick = cfg.get("moderator_nick", "Ваш_Nick_Name")
+    form_text = build_form(mod_nick, user, rule, punishment,
+                           evidence_url=evidence.url if evidence else "")
     try:
-        await member.send(
-            f"🎉 Ваша заявка на сервер **{guild.name}** одобрена! Добро пожаловать!"
-        )
+        await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
     except discord.Forbidden:
         pass
 
-    await interaction.response.send_message(
-        f"✅ Пользователь {member.mention} авторизован!", ephemeral=True
-    )
+    await interaction.followup.send(f"✅ Доказательство отправлено в {proof_channel.mention}!", ephemeral=True)
 
 
-async def handle_reject(interaction: discord.Interaction, user_id: int):
-    guild = interaction.guild
-    member = guild.get_member(user_id)
-    pending.discard(user_id)
+# ─── /banform ────────────────────────────────────────────────────────────────
 
-    embed = interaction.message.embeds[0]
-    embed.color = 0xE74C3C
-    embed.set_footer(
-        text=f"❌ Отклонён модератором {interaction.user} ({interaction.user.id})"
-    )
-    await interaction.message.edit(embed=embed, view=make_disabled_view(False))
-
-    if member:
-        try:
-            await member.send(
-                f"😔 Ваша заявка на сервер **{guild.name}** была отклонена."
-            )
-        except discord.Forbidden:
-            pass
-
-    name = str(member) if member else f"ID: {user_id}"
-    await interaction.response.send_message(
-        f"❌ Заявка пользователя **{name}** отклонена.", ephemeral=True
-    )
-
-
-async def _finalize_review(
-    interaction: discord.Interaction, approved: bool, label: str
+@bot.tree.command(name="banform", description="Сгенерировать форму бана")
+@app_commands.describe(
+    user="Нарушитель",
+    rule="Пункт правил",
+    punishment="Наказание (по умолчанию: Бан 7-15 дней)",
+    evidence="Скриншот доказательства (необязательно)",
+)
+@app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
+async def banform_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    rule: str,
+    punishment: str = "Бан 7-15 дней",
+    evidence: discord.Attachment | None = None,
 ):
-    embed = interaction.message.embeds[0]
-    embed.set_footer(text=label)
-    await interaction.message.edit(embed=embed, view=make_disabled_view(approved))
+    await interaction.response.defer(ephemeral=True)
+
+    mod_nick = cfg.get("moderator_nick", "Ваш_Nick_Name")
+    form_text = build_form(mod_nick, user, rule, punishment,
+                           evidence_url=evidence.url if evidence else "")
+    rule_text = RULES.get(rule, rule)
+
+    embed = discord.Embed(title="🔨 Форма бана", color=0xE74C3C, timestamp=datetime.now())
+    embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+    embed.add_field(name="Нарушитель", value=f"{user.mention} (`{user.id}`)", inline=False)
+    embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=False)
+    embed.add_field(name="Наказание", value=punishment, inline=False)
+    if evidence:
+        embed.set_image(url=evidence.url)
+
+    try:
+        await interaction.user.send(
+            content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
+            embed=embed,
+        )
+        await interaction.followup.send("✅ Форма бана отправлена в личку!", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
+            embed=embed,
+            ephemeral=True,
+        )
 
 
-# ─── Bot events ─────────────────────────────────────────────────────────────
+# ─── /gbanform ───────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="gbanform", description="Сгенерировать форму глобального бана")
+@app_commands.describe(
+    user="Нарушитель",
+    rule="Пункт правил",
+    evidence="Скриншот доказательства (необязательно)",
+)
+@app_commands.autocomplete(rule=rule_autocomplete)
+async def gbanform_cmd(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    rule: str,
+    evidence: discord.Attachment | None = None,
+):
+    await interaction.response.defer(ephemeral=True)
+
+    mod_nick = cfg.get("moderator_nick", "Ваш_Nick_Name")
+    form_text = build_form(mod_nick, user, rule, "Глобальная блокировка",
+                           evidence_url=evidence.url if evidence else "")
+    rule_text = RULES.get(rule, rule)
+
+    embed = discord.Embed(title="🌐 Форма глобального бана", color=0x8B0000, timestamp=datetime.now())
+    embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+    embed.add_field(name="Нарушитель", value=f"{user.mention} (`{user.id}`)", inline=False)
+    embed.add_field(name="Пункт правил", value=f"`{rule}` — {rule_text}", inline=False)
+    embed.add_field(name="Наказание", value="Глобальная блокировка", inline=False)
+    if evidence:
+        embed.set_image(url=evidence.url)
+
+    try:
+        await interaction.user.send(
+            content=f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
+            embed=embed,
+        )
+        await interaction.followup.send("✅ Форма G-бана отправлена в личку!", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            f"📝 **Форма для отчёта:**\n```\n{form_text}\n```",
+            embed=embed,
+            ephemeral=True,
+        )
+
+
+# ─── /uptime ─────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="uptime", description="Время работы бота")
+async def uptime_cmd(interaction: discord.Interaction):
+    elapsed = int(time.time() - START_TIME)
+    h, rem = divmod(elapsed, 3600)
+    m, s = divmod(rem, 60)
+    await interaction.response.send_message(
+        f"⏱️ Бот работает: **{h}ч {m}м {s}с**", ephemeral=True
+    )
+
+
+# ─── /setup ──────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup", description="Настройка бота (только для владельца)")
+@app_commands.describe(
+    proof_channel="Канал куда постить доказательства",
+    review_role="Роль, которая получает уведомление и может одобрять",
+    moderator_nick="Ваш ник для форм отчётов",
+)
+async def setup_cmd(
+    interaction: discord.Interaction,
+    proof_channel: discord.TextChannel | None = None,
+    review_role: discord.Role | None = None,
+    moderator_nick: str | None = None,
+):
+    is_owner = interaction.user.id == OWNER_ID or await bot.is_owner(interaction.user)
+    if not is_owner:
+        await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+        return
+
+    if proof_channel:
+        cfg["proof_channel_id"] = proof_channel.id
+    if review_role:
+        cfg["review_role_id"] = review_role.id
+    if moderator_nick:
+        cfg["moderator_nick"] = moderator_nick
+
+    save_config(cfg)
+
+    lines = ["✅ **Настройки сохранены:**"]
+    lines.append(f"• Канал доказательств: {interaction.guild.get_channel(cfg['proof_channel_id']).mention if cfg.get('proof_channel_id') else 'не задан'}")
+    lines.append(f"• Роль проверяющих: <@&{cfg['review_role_id']}>" if cfg.get("review_role_id") else "• Роль проверяющих: не задана")
+    lines.append(f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`")
+
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+# ─── Events ───────────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
-    bot.add_view(PersistentAuthView())
+    bot.add_view(ProofView())
+    await bot.tree.sync()
     print(f"✅ Бот запущен как {bot.user} (ID: {bot.user.id})")
-    print("Используйте !setup в своём Discord-сервере для настройки авторизации.")
-
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    if interaction.type != discord.InteractionType.component:
-        return
-
-    custom_id: str = interaction.data.get("custom_id", "")
-    parts = custom_id.split(":")
-
-    if len(parts) == 3 and parts[0] == "auth":
-        try:
-            user_id = int(parts[2])
-        except ValueError:
-            return
-        if parts[1] == "approve":
-            await handle_approve(interaction, user_id)
-        elif parts[1] == "reject":
-            await handle_reject(interaction, user_id)
-
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    unverified_role = await get_or_create_unverified_role(member.guild)
-    try:
-        await member.add_roles(unverified_role, reason="Новый участник — ожидает верификации")
-    except discord.Forbidden:
-        pass
-
-
-# ─── Setup command ───────────────────────────────────────────────────────────
-
-def is_owner():
-    async def predicate(ctx: commands.Context) -> bool:
-        if OWNER_ID and ctx.author.id == OWNER_ID:
-            return True
-        return await ctx.bot.is_owner(ctx.author)
-    return commands.check(predicate)
-
-
-def is_setup_done(guild: discord.Guild) -> bool:
-    has_category = discord.utils.get(guild.categories, name=AUTH_CATEGORY_NAME) is not None
-    has_auth_ch = discord.utils.get(guild.text_channels, name=AUTH_CHANNEL_NAME) is not None
-    has_review_ch = discord.utils.get(guild.text_channels, name=REVIEW_CHANNEL_NAME) is not None
-    has_member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME) is not None
-    return has_category and has_auth_ch and has_review_ch and has_member_role
-
-
-@bot.command(name="setup")
-@is_owner()
-async def setup_cmd(ctx: commands.Context):
-    """One-time setup: creates auth category, channels, roles, and permissions."""
-    guild = ctx.guild
-
-    if is_setup_done(guild):
-        await ctx.send(
-            "⚠️ Система авторизации уже настроена на этом сервере.\n"
-            "Все каналы, роли и категория уже существуют. Повторная настройка не требуется."
-        )
-        return
-
-    await ctx.send("⚙️ Настройка системы авторизации...")
-
-    # 1. Create the Member role
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if not member_role:
-        member_role = await guild.create_role(
-            name=MEMBER_ROLE_NAME,
-            color=discord.Color.green(),
-            hoist=True,
-            reason="Системная роль авторизации",
-        )
-        await ctx.send(f"✅ Создана роль **{MEMBER_ROLE_NAME}**")
-    else:
-        await ctx.send(f"ℹ️ Роль **{MEMBER_ROLE_NAME}** уже существует")
-
-    # 2. Create the Unverified role
-    unverified_role = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
-    if not unverified_role:
-        unverified_role = await guild.create_role(
-            name=UNVERIFIED_ROLE_NAME,
-            color=discord.Color.light_grey(),
-            reason="Системная роль неверифицированных участников",
-        )
-        await ctx.send(f"✅ Создана роль **{UNVERIFIED_ROLE_NAME}**")
-    else:
-        await ctx.send(f"ℹ️ Роль **{UNVERIFIED_ROLE_NAME}** уже существует")
-
-    everyone = guild.default_role
-
-    # 3. Hide all existing channels from @everyone; grant access to Участник
-    await ctx.send("⚙️ Настройка прав доступа к каналам...")
-    for channel in guild.channels:
-        if channel.name in (AUTH_CHANNEL_NAME, REVIEW_CHANNEL_NAME):
-            continue
-        try:
-            await channel.set_permissions(everyone, view_channel=False)
-            await channel.set_permissions(member_role, view_channel=True)
-        except discord.Forbidden:
-            pass
-
-    # 4. Create auth category
-    auth_category = discord.utils.get(guild.categories, name=AUTH_CATEGORY_NAME)
-    if not auth_category:
-        cat_overwrites = {
-            everyone: discord.PermissionOverwrite(
-                view_channel=True, send_messages=False
-            ),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        auth_category = await guild.create_category(
-            name=AUTH_CATEGORY_NAME,
-            overwrites=cat_overwrites,
-            reason="Категория авторизации",
-        )
-        await ctx.send(f"✅ Создана категория **{AUTH_CATEGORY_NAME}**")
-    else:
-        await ctx.send(f"ℹ️ Категория **{AUTH_CATEGORY_NAME}** уже существует")
-
-    # 5. Create auth channel
-    auth_channel = discord.utils.get(guild.text_channels, name=AUTH_CHANNEL_NAME)
-    if not auth_channel:
-        ch_overwrites = {
-            everyone: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=False,
-                read_message_history=True,
-            ),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        auth_channel = await guild.create_text_channel(
-            name=AUTH_CHANNEL_NAME,
-            category=auth_category,
-            overwrites=ch_overwrites,
-            topic="Нажмите кнопку, чтобы получить доступ к серверу",
-            reason="Канал авторизации",
-        )
-        await ctx.send(f"✅ Создан канал {auth_channel.mention}")
-    else:
-        await ctx.send(f"ℹ️ Канал **#{AUTH_CHANNEL_NAME}** уже существует")
-
-    # 6. Create review channel (staff only)
-    review_channel = discord.utils.get(guild.text_channels, name=REVIEW_CHANNEL_NAME)
-    if not review_channel:
-        rev_overwrites: dict = {
-            everyone: discord.PermissionOverwrite(view_channel=False),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        for role in guild.roles:
-            if role.permissions.administrator and role != everyone:
-                rev_overwrites[role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True
-                )
-
-        review_channel = await guild.create_text_channel(
-            name=REVIEW_CHANNEL_NAME,
-            category=auth_category,
-            overwrites=rev_overwrites,
-            topic="Заявки на авторизацию — только для модераторов",
-            reason="Канал рассмотрения заявок",
-        )
-        await ctx.send(f"✅ Создан канал {review_channel.mention}")
-    else:
-        await ctx.send(f"ℹ️ Канал **#{REVIEW_CHANNEL_NAME}** уже существует")
-
-    # 7. Post the auth embed with button
-    await auth_channel.purge(limit=20, check=lambda m: m.author == guild.me)
-
-    embed = discord.Embed(
-        title="🔐 Авторизация",
-        description=(
-            "Добро пожаловать на сервер!\n\n"
-            "Для получения доступа к каналам нажмите кнопку ниже.\n"
-            "Ваша заявка будет рассмотрена модераторами в ближайшее время."
-        ),
-        color=0x3498DB,
-    )
-    embed.set_footer(text="После одобрения заявки вам откроется доступ ко всем каналам.")
-
-    await auth_channel.send(embed=embed, view=PersistentAuthView())
-
-    await ctx.send(
-        f"🎉 **Настройка завершена!**\n"
-        f"• Канал авторизации: {auth_channel.mention}\n"
-        f"• Канал заявок (только модераторы): {review_channel.mention}\n"
-        f"• Роль авторизованных участников: **{MEMBER_ROLE_NAME}**\n"
-        f"• Роль неверифицированных: **{UNVERIFIED_ROLE_NAME}**\n\n"
-        f"Новые участники видят **только** канал авторизации."
-    )
-
-
-@setup_cmd.error
-async def setup_error(ctx: commands.Context, error: Exception):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ Эта команда доступна только владельцу бота.")
-    else:
-        await ctx.send(f"❌ Ошибка: {error}")
 
 
 keep_alive()
