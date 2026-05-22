@@ -595,12 +595,12 @@ async def _manage_callback(interaction: discord.Interaction):
         )
         return
 
-    if is_author:
-        panel = OwnerManageView(interaction.message)
-        label = "**⚙️ Управление формой:**"
-    else:
+    if is_leader:
         panel = LeaderManageView(interaction.message)
         label = "**⚙️ Управление формой (руководство):**"
+    else:
+        panel = OwnerManageView(interaction.message)
+        label = "**⚙️ Управление формой:**"
 
     await interaction.response.send_message(label, view=panel, ephemeral=True)
 

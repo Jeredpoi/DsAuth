@@ -482,6 +482,14 @@ class AuthCog(commands.Cog):
             except discord.Forbidden:
                 pass
 
+        # Extract logmsg_id BEFORE _disable_review mutates the embed footer in-place
+        logmsg_id = 0
+        if interaction.message.embeds:
+            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
+            m_log = re.search(r'logmsg:(\d+)', footer_text)
+            if m_log:
+                logmsg_id = int(m_log.group(1))
+
         guild_cfg_approve = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
             interaction, approved=True,
@@ -512,13 +520,6 @@ class AuthCog(commands.Cog):
         e.add_field(name="Одобрил", value=str(interaction.user), inline=False)
         e.set_footer(text="✅ Одобрена")
 
-        logmsg_id = 0
-        if interaction.message.embeds:
-            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
-            m_log = re.search(r'logmsg:(\d+)', footer_text)
-            if m_log:
-                logmsg_id = int(m_log.group(1))
-
         if logmsg_id:
             log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
             if log_ch:
@@ -538,6 +539,14 @@ class AuthCog(commands.Cog):
         member = interaction.guild.get_member(user_id)
 
         db.set_auth_cooldown(user_id)  # 24ч cooldown
+
+        # Extract logmsg_id BEFORE _disable_review mutates the embed footer in-place
+        logmsg_id = 0
+        if interaction.message.embeds:
+            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
+            m_log = re.search(r'logmsg:(\d+)', footer_text)
+            if m_log:
+                logmsg_id = int(m_log.group(1))
 
         guild_cfg_reject = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
@@ -564,13 +573,6 @@ class AuthCog(commands.Cog):
         e.add_field(name="Отклонил", value=str(interaction.user), inline=True)
         e.add_field(name="Cooldown", value=f"{AUTH_COOLDOWN_HOURS}ч", inline=True)
         e.set_footer(text="❌ Отклонена")
-
-        logmsg_id = 0
-        if interaction.message.embeds:
-            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
-            m_log = re.search(r'logmsg:(\d+)', footer_text)
-            if m_log:
-                logmsg_id = int(m_log.group(1))
 
         if logmsg_id:
             log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
