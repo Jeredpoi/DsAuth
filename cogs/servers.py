@@ -281,9 +281,12 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
 
     log_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
-        server_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+        server_role: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
+    for role in leadership_roles:
+        log_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+
     ch = discord.utils.get(guild.text_channels, name="📊-логи", category=category)
     if not ch:
         ch = await guild.create_text_channel(
@@ -291,16 +294,18 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             overwrites=log_ow,
             topic=f"Логи наказаний — сервер {server}",
         )
+    else:
+        await ch.edit(overwrites=log_ow)
     channel_ids["logs"] = ch.id
 
-    # Auth applications channel — inherits category access (server role only).
-    # Leadership from OTHER servers cannot see this because the category
-    # itself restricts to server_role. Each server's own GM has the server role.
     auth_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
-        server_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+        server_role: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
+    for role in leadership_roles:
+        auth_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
+
     ch = discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
     if not ch:
         ch = await guild.create_text_channel(
@@ -308,6 +313,8 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             overwrites=auth_ow,
             topic=f"Заявки на авторизацию — сервер {server}",
         )
+    else:
+        await ch.edit(overwrites=auth_ow)
     channel_ids["auth"] = ch.id
 
     for i in (1, 2):
