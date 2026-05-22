@@ -74,6 +74,7 @@ DEFAULT_GUILD_CFG: dict = {
     "review_role_id": 0,
     "auth_channel_id": 0,
     "auth_review_channel_id": 0,
+    "team_role_id": 0,
 }
 
 

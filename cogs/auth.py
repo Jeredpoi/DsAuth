@@ -130,32 +130,53 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
                 pass
 
 
-# ─── Кнопка подачи заявки (персистентная) ─────────────────────────────────────
+# ─── Кнопка подачи заявки — Components V2 (персистентная) ────────────────────
 
-class AuthButtonView(discord.ui.View):
+async def _auth_apply_callback(interaction: discord.Interaction):
+    unverified = discord.utils.get(interaction.guild.roles, name=UNVERIFIED_ROLE_NAME)
+    if not unverified or unverified not in interaction.user.roles:
+        await interaction.response.send_message("✅ Вы уже авторизованы!", ephemeral=True)
+        return
+
+    remaining = db.get_auth_cooldown_remaining(interaction.user.id)
+    if remaining > 0:
+        h, m = divmod(remaining // 60, 60)
+        await interaction.response.send_message(
+            f"❌ Повторная заявка доступна через **{h}ч {m}м**.", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_modal(AuthModal(interaction.client))
+
+
+class AuthButtonView(discord.ui.LayoutView):
+    """Persistent V2 layout — auth channel welcome message with apply button."""
+
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="📋 Подать заявку",
-        style=discord.ButtonStyle.primary,
-        custom_id="auth:apply",
-    )
-    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
-        unverified = discord.utils.get(interaction.guild.roles, name=UNVERIFIED_ROLE_NAME)
-        if not unverified or unverified not in interaction.user.roles:
-            await interaction.response.send_message("✅ Вы уже авторизованы!", ephemeral=True)
-            return
+        btn = discord.ui.Button(
+            label="📋 Подать заявку",
+            style=discord.ButtonStyle.primary,
+            custom_id="auth:apply",
+        )
+        btn.callback = _auth_apply_callback
 
-        remaining = db.get_auth_cooldown_remaining(interaction.user.id)
-        if remaining > 0:
-            h, m = divmod(remaining // 60, 60)
-            await interaction.response.send_message(
-                f"❌ Повторная заявка доступна через **{h}ч {m}м**.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(AuthModal(interaction.client))
+        container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(
+                    "## 🔐 Авторизация\n"
+                    "Добро пожаловать!\n\n"
+                    "Для получения доступа нажмите кнопку и заполните форму.\n"
+                    "Ваша заявка будет рассмотрена в ближайшее время."
+                ),
+                accessory=btn,
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay("После одобрения заявки вам будет выдана должность."),
+            accent_color=0x5865F2,
+        )
+        self.add_item(container)
 
 
 # ─── Кнопки рассмотрения заявки ───────────────────────────────────────────────
@@ -290,6 +311,11 @@ class AuthCog(commands.Cog):
                     server_num = field.value.strip()
                     break
 
+        # Team role (общая роль для всех авторизованных)
+        guild_cfg_cur = get_guild_cfg(self.bot.cfg, guild.id)
+        team_role_id = guild_cfg_cur.get("team_role_id", 0)
+        team_role = guild.get_role(team_role_id) if team_role_id else None
+
         role_error = None
         if server_num and server_num.isdigit():
             try:
@@ -299,7 +325,7 @@ class AuthCog(commands.Cog):
                         name=server_num, color=discord.Color.green(),
                         hoist=True, reason=f"Авторизация на сервер {server_num}",
                     )
-                roles_to_add = [r for r in (rank_role, server_role) if r]
+                roles_to_add = [r for r in (rank_role, server_role, team_role) if r]
                 if roles_to_add:
                     await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             except discord.Forbidden:
@@ -311,7 +337,8 @@ class AuthCog(commands.Cog):
             db.clear_auth_cooldown(member.id)
 
         elif rank_role:
-            await member.add_roles(rank_role, reason=f"Авторизован: {interaction.user}")
+            roles_to_add = [r for r in (rank_role, team_role) if r]
+            await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             db.clear_auth_cooldown(member.id)
 
         # Автоник: [СМ | 50] Имя
@@ -412,7 +439,8 @@ class AuthCog(commands.Cog):
     # ─── /setup-auth ───────────────────────────────────────────────────────
     @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="setup-auth", description="Настроить систему авторизации на этом сервере")
-    async def setup_auth_cmd(self, interaction: discord.Interaction):
+    @app_commands.describe(team_role="Роль, выдаваемая всем авторизованным (необязательно)")
+    async def setup_auth_cmd(self, interaction: discord.Interaction, team_role: discord.Role | None = None):
         guild = interaction.guild
 
         if interaction.user.id != guild.owner_id and not await self.bot.is_owner(interaction.user):
@@ -508,20 +536,12 @@ class AuthCog(commands.Cog):
 
         guild_cfg["auth_channel_id"] = auth_channel.id
         guild_cfg["auth_review_channel_id"] = review_channel.id
+        if team_role:
+            guild_cfg["team_role_id"] = team_role.id
         save_config(self.bot.cfg)
 
         await auth_channel.purge(limit=10, check=lambda m: m.author == guild.me)
-        embed = discord.Embed(
-            title="🔐 Авторизация",
-            description=(
-                "Добро пожаловать!\n\n"
-                "Для получения доступа нажмите кнопку ниже и заполните форму.\n"
-                "Ваша заявка будет рассмотрена в ближайшее время."
-            ),
-            color=0x5865F2,
-        )
-        embed.set_footer(text="После одобрения заявки вам будет выдана должность.")
-        await auth_channel.send(embed=embed, view=AuthButtonView())
+        await auth_channel.send(view=AuthButtonView())
 
         lines = [
             "🎉 **Система авторизации настроена!**",
@@ -530,6 +550,7 @@ class AuthCog(commands.Cog):
             f"• Канал заявок: {review_channel.mention}",
             f"• Роль новых участников: **{UNVERIFIED_ROLE_NAME}**",
             f"• Автокик неавторизованных: через **{AUTOKICK_DAYS} дня**",
+            f"• Командная роль: {team_role.mention if team_role else '❌ не задана (задайте через /setup-auth team_role:...)'}",
         ]
         if created_roles:
             lines.append(f"• Созданы должности: {', '.join(f'**{r}**' for r in created_roles)}")
@@ -561,9 +582,14 @@ class AuthCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
+        guild_cfg_d = get_guild_cfg(self.bot.cfg, interaction.guild_id)
+        team_role_id_d = guild_cfg_d.get("team_role_id", 0)
+        team_role_d = interaction.guild.get_role(team_role_id_d) if team_role_id_d else None
+
         roles_to_remove = [
             r for r in member.roles
             if r.name in RANKS or is_server_role(r.name)
+            or (team_role_d and r.id == team_role_d.id)
         ]
         unverified = discord.utils.get(interaction.guild.roles, name=UNVERIFIED_ROLE_NAME)
         try:
@@ -648,10 +674,15 @@ class AuthCog(commands.Cog):
                 reason="Автосоздание роли при смене звания",
             )
 
+        guild_cfg_p = get_guild_cfg(self.bot.cfg, guild.id)
+        team_role_p = guild.get_role(guild_cfg_p.get("team_role_id", 0) or 0)
+        roles_to_add_p = [r for r in (rank_role, team_role_p) if r and r not in member.roles]
+
         try:
             if old_rank_roles:
                 await member.remove_roles(*old_rank_roles, reason=f"Смена звания: {interaction.user}")
-            await member.add_roles(rank_role, reason=f"Новое звание: {rank} ({interaction.user})")
+            if roles_to_add_p:
+                await member.add_roles(*roles_to_add_p, reason=f"Новое звание: {rank} ({interaction.user})")
         except discord.Forbidden:
             await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
             return
