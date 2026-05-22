@@ -133,69 +133,118 @@ def _build_fields_text(
 def _make_layout_view(
     header_text: str,
     fields_text: str,
-    evidence_url: str,
+    evidence_urls: list[str],
     color: int,
     violator_avatar_url: str = "",
-    manage_disabled: bool = False,
-    evidence_disabled: bool = False,
+    form_type: str = "proof",
+    done: bool = False,
 ) -> discord.ui.LayoutView:
+    """
+    Build a V2 LayoutView for a punishment form.
+
+    Layout (banform/gbanform, not done):
+      Section(header, Thumbnail(avatar))
+      Separator
+      Section(fields, approve_btn)
+      Section("Отклонить", reject_btn)
+      Separator
+      Section("⚙️ Управление · только автор", manage_btn)
+      Section("🔗 Доказательства", evidence_btn)
+      [MediaGallery if evidence_urls]
+
+    Layout (proof or done state):
+      Section(header, Thumbnail(avatar))
+      Separator
+      Section(fields, manage_btn)   [proof / not done]
+      Section("🔗 Доказательства", evidence_btn)
+      [MediaGallery if evidence_urls]
+    """
+    is_banform = form_type in ("banform", "gbanform")
+
     manage_btn = discord.ui.Button(
-        label="Управление наказанием",
-        style=discord.ButtonStyle.success if not manage_disabled else discord.ButtonStyle.secondary,
+        label="⚙️ Управление",
+        style=discord.ButtonStyle.secondary,
         custom_id="punishment:manage",
-        disabled=manage_disabled,
+        disabled=done,
     )
     evidence_btn = discord.ui.Button(
-        label="Доказательство",
+        label="Доказательства",
         style=discord.ButtonStyle.secondary,
         custom_id="punishment:evidence",
         emoji="🔗",
-        disabled=evidence_disabled,
+        disabled=done,
+    )
+    approve_btn = discord.ui.Button(
+        label="✅ Одобрить",
+        style=discord.ButtonStyle.success,
+        custom_id="punishment:approve",
+        disabled=done,
+    )
+    reject_btn = discord.ui.Button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.danger,
+        custom_id="punishment:reject",
+        disabled=done,
     )
 
     container_items: list = []
 
+    # Header: title + moderator, with violator avatar thumbnail
     if violator_avatar_url:
-        # Header with avatar thumbnail, fields with manage button, evidence row at bottom
         container_items.append(
             discord.ui.Section(
                 discord.ui.TextDisplay(header_text),
                 accessory=discord.ui.Thumbnail(violator_avatar_url),
             )
         )
-        container_items.append(discord.ui.Separator())
+    else:
+        container_items.append(discord.ui.TextDisplay(header_text))
+
+    container_items.append(discord.ui.Separator())
+
+    if is_banform and not done:
+        # Fields with Approve on the right; Reject below
         container_items.append(
             discord.ui.Section(
                 discord.ui.TextDisplay(fields_text),
-                accessory=manage_btn,
+                accessory=approve_btn,
             )
         )
         container_items.append(
             discord.ui.Section(
-                discord.ui.TextDisplay("🔗 Прикрепить / просмотреть доказательство"),
-                accessory=evidence_btn,
+                discord.ui.TextDisplay("-# Отклонить форму"),
+                accessory=reject_btn,
+            )
+        )
+        container_items.append(discord.ui.Separator())
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay("-# Управление · только автор формы"),
+                accessory=manage_btn,
             )
         )
     else:
-        # Header with manage button, fields with evidence button
-        container_items.append(
-            discord.ui.Section(
-                discord.ui.TextDisplay(header_text),
-                accessory=manage_btn,
-            )
-        )
-        container_items.append(discord.ui.Separator())
+        # Proof or done state: fields with manage on the right
         container_items.append(
             discord.ui.Section(
                 discord.ui.TextDisplay(fields_text),
-                accessory=evidence_btn,
+                accessory=manage_btn,
             )
         )
 
-    if evidence_url:
-        container_items.append(
-            discord.ui.MediaGallery(discord.MediaGalleryItem(evidence_url))
+    container_items.append(
+        discord.ui.Section(
+            discord.ui.TextDisplay(
+                f"🔗 **{len(evidence_urls)}** доказательств прикреплено"
+                if evidence_urls else "🔗 Доказательства не прикреплены"
+            ),
+            accessory=evidence_btn,
         )
+    )
+
+    if evidence_urls:
+        gallery_items = [discord.MediaGalleryItem(u) for u in evidence_urls[:4]]
+        container_items.append(discord.ui.MediaGallery(*gallery_items))
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*container_items, accent_color=color))
@@ -205,10 +254,9 @@ def _make_layout_view(
 # ─── Extract data from V2 message ─────────────────────────────────────────────
 
 def _collect_text_from_components(comps) -> str:
-    """Recursively collect TextDisplay content from discord.components objects."""
     texts = []
     for comp in comps:
-        if hasattr(comp, 'content'):  # TextDisplay component
+        if hasattr(comp, 'content'):
             texts.append(comp.content)
         if hasattr(comp, 'children') and comp.children:
             texts.append(_collect_text_from_components(comp.children))
@@ -240,10 +288,10 @@ def _extract_v2_data(message: discord.Message) -> dict:
     return data
 
 
-def _extract_evidence_url_from_components(comps) -> str:
-    """Walk MediaGallery items to find evidence URL."""
+def _extract_evidence_urls(comps) -> list[str]:
+    """Return all evidence URLs from MediaGallery components."""
+    urls = []
     for comp in comps:
-        # discord.components.MediaGalleryComponent has .children with media items
         type_val = getattr(getattr(comp, 'type', None), 'value', None)
         if type_val == 20:  # ComponentType.media_gallery
             items = getattr(comp, 'children', []) or getattr(comp, 'items', [])
@@ -252,32 +300,91 @@ def _extract_evidence_url_from_components(comps) -> str:
                 if media:
                     url = getattr(media, 'url', None) or getattr(media, 'proxy_url', None)
                     if url:
-                        return url
+                        urls.append(url)
         if hasattr(comp, 'children') and comp.children:
-            url = _extract_evidence_url_from_components(comp.children)
+            urls.extend(_extract_evidence_urls(comp.children))
+    return urls
+
+
+def _extract_avatar_url(comps) -> str:
+    """Return the first Thumbnail URL from the message."""
+    for comp in comps:
+        type_val = getattr(getattr(comp, 'type', None), 'value', None)
+        if type_val == 22:  # ComponentType.thumbnail
+            media = getattr(comp, 'media', None)
+            if media:
+                return getattr(media, 'url', None) or getattr(media, 'proxy_url', None) or ""
+        if hasattr(comp, 'children') and comp.children:
+            url = _extract_avatar_url(comp.children)
             if url:
                 return url
+        acc = getattr(comp, 'accessory', None)
+        if acc:
+            type_val_acc = getattr(getattr(acc, 'type', None), 'value', None)
+            if type_val_acc == 22:
+                media = getattr(acc, 'media', None)
+                if media:
+                    return getattr(media, 'url', None) or getattr(media, 'proxy_url', None) or ""
     return ""
 
 
 def _is_pending_v2_message(message: discord.Message) -> bool:
-    """Check if a V2 message has a non-disabled punishment:manage button."""
     def walk(comps):
         for comp in comps:
             cid = getattr(comp, 'custom_id', None)
-            if cid == "punishment:manage" and not getattr(comp, 'disabled', False):
+            if cid in ("punishment:manage", "punishment:approve") and not getattr(comp, 'disabled', False):
                 return True
             if hasattr(comp, 'children') and comp.children and walk(comp.children):
                 return True
-            if hasattr(comp, 'accessory') and comp.accessory:
-                a = comp.accessory
-                if getattr(a, 'custom_id', None) == "punishment:manage" and not getattr(a, 'disabled', False):
+            acc = getattr(comp, 'accessory', None)
+            if acc:
+                cid_acc = getattr(acc, 'custom_id', None)
+                if cid_acc in ("punishment:manage", "punishment:approve") and not getattr(acc, 'disabled', False):
                     return True
         return False
     return walk(message.components)
 
 
-# ─── Log embed (for log channels, not subject to V2 restrictions) ─────────────
+# ─── Rebuild helper ───────────────────────────────────────────────────────────
+
+def _rebuild_view_from_message(
+    message: discord.Message,
+    color: int,
+    done: bool = False,
+    status_line: str | None = None,
+) -> discord.ui.LayoutView:
+    """Reconstruct a layout view from an existing V2 message, optionally marking it done."""
+    data = _extract_v2_data(message)
+    title      = data.get("title", "Наказание пользователя")
+    mod_id     = data.get("mod_id", 0)
+    user_id    = data.get("user_id", 0)
+    rule_id    = data.get("rule_id", "")
+    punishment = data.get("punishment", "")
+    form_type  = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
+
+    h_text = _build_header_text(title, mod_id)
+    f_text = _build_fields_text(user_id, rule_id, punishment, form_type)
+
+    if status_line:
+        f_text = f_text.replace(
+            next((l for l in f_text.split("\n") if "⏳" in l), "___NONE___"),
+            status_line,
+        )
+
+    avatar_url   = _extract_avatar_url(message.components)
+    evidence_urls = _extract_evidence_urls(message.components)
+
+    view = _make_layout_view(
+        h_text, f_text, evidence_urls, color,
+        violator_avatar_url=avatar_url,
+        form_type=form_type,
+        done=done,
+    )
+    _wire_callbacks(view)
+    return view
+
+
+# ─── Log embed ────────────────────────────────────────────────────────────────
 
 def _build_log_embed(
     title: str,
@@ -312,9 +419,10 @@ async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: disc
 
 class AddEvidenceModal(discord.ui.Modal, title="Добавить доказательство"):
     url_input = discord.ui.TextInput(
-        label="Ссылка на доказательство",
+        label="Ссылка на доказательство (или несколько через пробел)",
         placeholder="https://cdn.discordapp.com/attachments/...",
-        max_length=500,
+        style=discord.TextStyle.paragraph,
+        max_length=800,
         required=True,
     )
 
@@ -323,41 +431,49 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
         self.proof_message = proof_message
 
     async def on_submit(self, interaction: discord.Interaction):
-        url = self.url_input.value.strip()
+        new_urls = [u.strip() for u in self.url_input.value.split() if u.strip().startswith("http")]
+        if not new_urls:
+            await interaction.response.send_message("❌ Укажите корректную ссылку (http...).", ephemeral=True)
+            return
 
-        # Rebuild layout view with the new evidence URL
+        existing = _extract_evidence_urls(self.proof_message.components)
+        combined = existing + [u for u in new_urls if u not in existing]
+        combined = combined[:4]  # Discord MediaGallery limit
+
         data = _extract_v2_data(self.proof_message)
-        header_text = _collect_text_from_components(self.proof_message.components).split("**Нарушитель:**")[0].strip()
-        fields_text_match = re.search(
-            r'(\*\*Нарушитель:\*\*.*?)(?=\n## |\Z)',
-            _collect_text_from_components(self.proof_message.components),
-            re.DOTALL,
-        )
-        fields_text = fields_text_match.group(1).strip() if fields_text_match else ""
-
-        # Simpler: just re-extract header and fields from the stored data
-        title = data.get("title", "Наказание пользователя")
-        mod_id = data.get("mod_id", 0)
-        user_id = data.get("user_id", 0)
-        rule_id = data.get("rule_id", "")
         punishment = data.get("punishment", "")
-        form_type = _form_type_from_punishment(punishment)
+        color = _punishment_color(punishment)
+
+        new_view = _rebuild_view_from_message(self.proof_message, color)
+        # Override evidence with the combined list
+        data2 = _extract_v2_data(self.proof_message)
+        title  = data2.get("title", "Наказание пользователя")
+        mod_id = data2.get("mod_id", 0)
+        user_id = data2.get("user_id", 0)
+        rule_id = data2.get("rule_id", "")
+        form_type = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
 
         h_text = _build_header_text(title, mod_id)
         f_text = _build_fields_text(user_id, rule_id, punishment, form_type)
-        color = _punishment_color(punishment)
+        avatar_url = _extract_avatar_url(self.proof_message.components)
 
-        new_view = _make_layout_view(h_text, f_text, url, color)
+        new_view = _make_layout_view(
+            h_text, f_text, combined, color,
+            violator_avatar_url=avatar_url, form_type=form_type,
+        )
         _wire_callbacks(new_view)
 
         await self.proof_message.edit(view=new_view)
-        await interaction.response.send_message("✅ Доказательство добавлено.", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ Добавлено {len(new_urls)} доказательств. Всего: {len(combined)}.", ephemeral=True
+        )
 
 
-# ─── Ephemeral management views ───────────────────────────────────────────────
+# ─── Owner management panel ───────────────────────────────────────────────────
 
-class ProofManagementView(discord.ui.View):
-    """Для /proof — только добавление доказательства."""
+class OwnerManageView(discord.ui.View):
+    """Ephemeral panel shown only to the form's author."""
+
     def __init__(self, proof_message: discord.Message):
         super().__init__(timeout=120)
         self.proof_message = proof_message
@@ -366,175 +482,180 @@ class ProofManagementView(discord.ui.View):
     async def add_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AddEvidenceModal(self.proof_message))
 
-
-class FormManagementView(discord.ui.View):
-    """Для /banform и /gbanform — одобрение, отклонение и доказательство."""
-    def __init__(self, proof_message: discord.Message, form_type: str):
-        super().__init__(timeout=120)
-        self.proof_message = proof_message
-        self.form_type = form_type
-
-    @discord.ui.button(label="✅ Одобрить", style=discord.ButtonStyle.success)
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        min_level = APPROVE_MIN_RANK.get(self.form_type, 2)
-        if get_member_rank_level(interaction.user) < min_level:
-            await interaction.response.send_message(
-                f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        data = _extract_v2_data(self.proof_message)
-        user_id   = data.get("user_id", 0)
-        punishment = data.get("punishment", "")
-        rule_id   = data.get("rule_id", "")
-        mod_id    = data.get("mod_id", 0)
-        title     = data.get("title", "Наказание пользователя")
-
-        command = build_command(punishment, user_id, rule_id)
-        rank_display = next(
-            (r.name for r in reversed(getattr(interaction.user, "roles", [])) if r.name in RANKS), "—"
-        )
-        status = f"✅ Одобрено: {interaction.user} ({rank_display})"
-        if command:
-            status += f"\n💻 `{command}`"
-
-        h_text = _build_header_text(title, mod_id)
-        f_text = _build_fields_text(user_id, rule_id, punishment, self.form_type)
-        f_text = f_text.replace(
-            next((l for l in f_text.split("\n") if "⏳" in l), "___NONE___"),
-            status,
-        )
-        evidence_url = _extract_evidence_url_from_components(self.proof_message.components)
-        done_view = _make_layout_view(h_text, f_text, evidence_url, 0x2ECC71, manage_disabled=True, evidence_disabled=True)
-
-        await self.proof_message.edit(view=done_view)
-        record_form(mod_id, self.form_type, "approved")
-
-        server = get_server_for_member(interaction.user, interaction.client.cfg)
-        if server:
-            log_embed = _build_log_embed(title, mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
-            await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
-
-        await interaction.followup.send("✅ Форма одобрена.", ephemeral=True)
-
-    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.danger)
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        data = _extract_v2_data(self.proof_message)
-        mod_id    = data.get("mod_id", 0)
-        user_id   = data.get("user_id", 0)
-        rule_id   = data.get("rule_id", "")
-        punishment = data.get("punishment", "")
-        title     = data.get("title", "Наказание пользователя")
-
-        rank_display = next(
-            (r.name for r in reversed(getattr(interaction.user, "roles", [])) if r.name in RANKS), "—"
-        )
-        status = f"❌ Отклонено: {interaction.user} ({rank_display})"
-
-        h_text = _build_header_text(title, mod_id)
-        f_text = _build_fields_text(user_id, rule_id, punishment, self.form_type)
-        f_text = f_text.replace(
-            next((l for l in f_text.split("\n") if "⏳" in l), "___NONE___"),
-            status,
-        )
-        evidence_url = _extract_evidence_url_from_components(self.proof_message.components)
-        done_view = _make_layout_view(h_text, f_text, evidence_url, 0xE74C3C, manage_disabled=True, evidence_disabled=True)
-
-        await self.proof_message.edit(view=done_view)
-        record_form(mod_id, self.form_type, "rejected")
-
-        server = get_server_for_member(interaction.user, interaction.client.cfg)
-        if server:
-            log_embed = _build_log_embed(title, mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
-            await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
-
-        await interaction.followup.send("❌ Форма отклонена.", ephemeral=True)
-
-    @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.secondary)
-    async def add_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AddEvidenceModal(self.proof_message))
+    @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
+    async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await self.proof_message.delete()
+            await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
 
 
-# ─── PunishmentLayoutView (persistent) ───────────────────────────────────────
+# ─── Button callbacks ─────────────────────────────────────────────────────────
 
 def _wire_callbacks(view: discord.ui.LayoutView) -> None:
-    """Set manage/evidence callbacks on buttons inside a LayoutView."""
     for item in view.walk_children():
         cid = getattr(item, 'custom_id', None)
         if cid == "punishment:manage":
             item.callback = _manage_callback
         elif cid == "punishment:evidence":
             item.callback = _evidence_callback
+        elif cid == "punishment:approve":
+            item.callback = _approve_callback
+        elif cid == "punishment:reject":
+            item.callback = _reject_callback
 
 
 async def _manage_callback(interaction: discord.Interaction):
     data = _extract_v2_data(interaction.message)
-    punishment = data.get("punishment", "")
-    title = data.get("title", "")
-    form_type = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
+    mod_id = data.get("mod_id", 0)
 
-    if form_type in ("banform", "gbanform"):
-        min_level = APPROVE_MIN_RANK.get(form_type, 2)
-        if get_member_rank_level(interaction.user) < min_level:
-            await interaction.response.send_message(
-                f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
-            )
-            return
-        view = FormManagementView(interaction.message, form_type)
-    else:
-        view = ProofManagementView(interaction.message)
+    if interaction.user.id != mod_id:
+        await interaction.response.send_message(
+            "❌ Управление доступно только **автору** этой формы.", ephemeral=True
+        )
+        return
 
     await interaction.response.send_message(
-        "**Управление наказанием** — выберите действие:",
-        view=view,
+        "**⚙️ Управление формой:**",
+        view=OwnerManageView(interaction.message),
         ephemeral=True,
     )
 
 
 async def _evidence_callback(interaction: discord.Interaction):
-    evidence_url = _extract_evidence_url_from_components(interaction.message.components)
-    if evidence_url:
-        await interaction.response.send_message(
-            f"🔗 **Доказательство:** {evidence_url}", ephemeral=True
-        )
-    else:
-        await interaction.response.send_modal(AddEvidenceModal(interaction.message))
+    evidence_urls = _extract_evidence_urls(interaction.message.components)
+    data = _extract_v2_data(interaction.message)
+    mod_id = data.get("mod_id", 0)
+    is_author = interaction.user.id == mod_id
 
+    if evidence_urls:
+        lines = [f"🔗 **Доказательства ({len(evidence_urls)}):**"]
+        for i, url in enumerate(evidence_urls, 1):
+            lines.append(f"{i}. {url}")
+        if is_author:
+            lines.append("\n*(Добавить ещё — через кнопку ⚙️ Управление)*")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    elif is_author:
+        await interaction.response.send_modal(AddEvidenceModal(interaction.message))
+    else:
+        await interaction.response.send_message(
+            "🔗 Доказательства не прикреплены.", ephemeral=True
+        )
+
+
+async def _approve_callback(interaction: discord.Interaction):
+    data = _extract_v2_data(interaction.message)
+    punishment = data.get("punishment", "")
+    title = data.get("title", "")
+    form_type = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
+
+    min_level = APPROVE_MIN_RANK.get(form_type, 2)
+    if get_member_rank_level(interaction.user) < min_level:
+        await interaction.response.send_message(
+            f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    user_id  = data.get("user_id", 0)
+    rule_id  = data.get("rule_id", "")
+    mod_id   = data.get("mod_id", 0)
+
+    command = build_command(punishment, user_id, rule_id)
+    rank_display = next(
+        (r.name for r in reversed(getattr(interaction.user, "roles", [])) if r.name in RANKS), "—"
+    )
+    status = f"✅ Одобрено: {interaction.user} ({rank_display})"
+    if command:
+        status += f"\n💻 `{command}`"
+
+    done_view = _rebuild_view_from_message(interaction.message, 0x2ECC71, done=True, status_line=status)
+    await interaction.message.edit(view=done_view)
+    record_form(mod_id, form_type, "approved")
+
+    server = get_server_for_member(interaction.user, interaction.client.cfg)
+    if server:
+        log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
+        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
+
+    await interaction.followup.send("✅ Форма одобрена.", ephemeral=True)
+
+
+async def _reject_callback(interaction: discord.Interaction):
+    data = _extract_v2_data(interaction.message)
+    punishment = data.get("punishment", "")
+    title = data.get("title", "")
+    form_type = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
+
+    min_level = APPROVE_MIN_RANK.get(form_type, 2)
+    if get_member_rank_level(interaction.user) < min_level:
+        await interaction.response.send_message(
+            f"❌ Требуется минимум: **{RANKS[min_level - 1]}**.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    mod_id  = data.get("mod_id", 0)
+    user_id = data.get("user_id", 0)
+    rule_id = data.get("rule_id", "")
+
+    rank_display = next(
+        (r.name for r in reversed(getattr(interaction.user, "roles", [])) if r.name in RANKS), "—"
+    )
+    status = f"❌ Отклонено: {interaction.user} ({rank_display})"
+
+    done_view = _rebuild_view_from_message(interaction.message, 0xE74C3C, done=True, status_line=status)
+    await interaction.message.edit(view=done_view)
+    record_form(mod_id, form_type, "rejected")
+
+    server = get_server_for_member(interaction.user, interaction.client.cfg)
+    if server:
+        log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
+        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
+
+    await interaction.followup.send("❌ Форма отклонена.", ephemeral=True)
+
+
+# ─── PunishmentLayoutView (persistent registration) ──────────────────────────
 
 class PunishmentLayoutView(discord.ui.LayoutView):
-    """Persistent LayoutView — registered once at startup to handle all punishment forms."""
+    """Registered once at startup so discord.py can dispatch button interactions."""
 
     def __init__(self):
         super().__init__(timeout=None)
 
-        manage_btn = discord.ui.Button(
-            label="Управление наказанием",
-            style=discord.ButtonStyle.success,
-            custom_id="punishment:manage",
-        )
-        manage_btn.callback = _manage_callback
+        btns = [
+            discord.ui.Button(label="⚙️ Управление",    style=discord.ButtonStyle.secondary, custom_id="punishment:manage"),
+            discord.ui.Button(label="Доказательства",   style=discord.ButtonStyle.secondary, custom_id="punishment:evidence", emoji="🔗"),
+            discord.ui.Button(label="✅ Одобрить",       style=discord.ButtonStyle.success,   custom_id="punishment:approve"),
+            discord.ui.Button(label="❌ Отклонить",      style=discord.ButtonStyle.danger,    custom_id="punishment:reject"),
+        ]
+        callbacks = [_manage_callback, _evidence_callback, _approve_callback, _reject_callback]
+        for btn, cb in zip(btns, callbacks):
+            btn.callback = cb
 
-        evidence_btn = discord.ui.Button(
-            label="Доказательство",
-            style=discord.ButtonStyle.secondary,
-            custom_id="punishment:evidence",
-            emoji="🔗",
-        )
-        evidence_btn.callback = _evidence_callback
-
+        # Wrap in a minimal container so walk_children() works
         container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay("## Форма наказания\n**Модератор:** —"),
-                accessory=manage_btn,
+                accessory=btns[0],
             ),
             discord.ui.Separator(),
             discord.ui.Section(
                 discord.ui.TextDisplay("..."),
-                accessory=evidence_btn,
+                accessory=btns[1],
+            ),
+            discord.ui.Separator(),
+            discord.ui.Section(
+                discord.ui.TextDisplay("-# Одобрить"),
+                accessory=btns[2],
+            ),
+            discord.ui.Section(
+                discord.ui.TextDisplay("-# Отклонить"),
+                accessory=btns[3],
             ),
             accent_color=0x3498DB,
         )
@@ -596,17 +717,20 @@ async def _post_form(
             )
         return
 
-    title = _punishment_title(punishment)
-    color = _punishment_color(punishment)
-    h_text = _build_header_text(title, moderator.id)
-    f_text = _build_fields_text(violator.id, rule_id, punishment, form_type)
-    avatar_url = str(violator.display_avatar.url) if violator.display_avatar else ""
+    title       = _punishment_title(punishment)
+    color       = _punishment_color(punishment)
+    h_text      = _build_header_text(title, moderator.id)
+    f_text      = _build_fields_text(violator.id, rule_id, punishment, form_type)
+    avatar_url  = str(violator.display_avatar.url) if violator.display_avatar else ""
+    ev_urls     = [evidence_url] if evidence_url else []
 
-    layout_view = _make_layout_view(h_text, f_text, evidence_url, color, violator_avatar_url=avatar_url)
+    layout_view = _make_layout_view(
+        h_text, f_text, ev_urls, color,
+        violator_avatar_url=avatar_url, form_type=form_type,
+    )
     _wire_callbacks(layout_view)
 
     await proof_ch.send(view=layout_view)
-
     record_form(interaction.user.id, form_type, "sent")
 
     form_text = build_form(cfg, violator, rule_id, punishment, evidence_url=evidence_url)
@@ -667,7 +791,6 @@ class ProofCog(commands.Cog):
                         continue
                     if not _is_pending_v2_message(msg):
                         continue
-                    # Only remind for banform/gbanform
                     data = _extract_v2_data(msg)
                     punishment = data.get("punishment", "")
                     if _form_type_from_punishment(punishment) == "proof":

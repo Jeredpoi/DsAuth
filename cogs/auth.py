@@ -76,6 +76,8 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         rank_val = self.rank.value.strip()
         rank_expanded = RANK_ABBR.get(rank_val.lower(), rank_val)
 
+        await interaction.response.defer(ephemeral=True)
+
         guild = interaction.guild
         cfg = self.bot.cfg
         guild_cfg = get_guild_cfg(cfg, guild.id)
@@ -98,7 +100,7 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
                 dest_ch = guild.get_channel(review_ch_id)
 
         if not dest_ch:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Канал заявок не найден. Попросите администратора запустить `/deploy`.",
                 ephemeral=True,
             )
@@ -118,7 +120,7 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         view = AuthReviewView(member.id)
         await dest_ch.send(embed=embed, view=view)
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Заявка отправлена в канал сервера **{server_val}**! Ожидайте решения.", ephemeral=True
         )
 
