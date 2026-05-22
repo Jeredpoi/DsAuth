@@ -767,6 +767,46 @@ class PunishmentLayoutView(discord.ui.LayoutView):
 
 # ─── Post form ────────────────────────────────────────────────────────────────
 
+def _resolve_server(member: discord.Member, cfg: dict, server_override: str | None) -> tuple[str | None, str | None]:
+    """
+    Return (server, error_message).
+    Priority:
+      1. Explicit server_override (from command param)
+      2. Member's numeric server roles (1–90)
+         - Exactly one  → use it
+         - Multiple     → return error asking to specify
+      3. DB fallback (set_user_server) — only if no role at all
+    """
+    if server_override:
+        if not (server_override.isdigit() and 1 <= int(server_override) <= 90):
+            return None, f"❌ Некорректный номер сервера: **{server_override}** (должно быть 1–90)."
+        return server_override, None
+
+    from cogs.servers import is_server_role
+    server_roles = [r.name for r in getattr(member, "roles", []) if is_server_role(r.name)]
+
+    if len(server_roles) == 1:
+        return server_roles[0], None
+
+    if len(server_roles) > 1:
+        role_list = ", ".join(f"**{s}**" for s in sorted(server_roles, key=int))
+        return None, (
+            f"❌ У вас несколько ролей серверов: {role_list}.\n"
+            "Укажите нужный через параметр `server`, например: `/proof server:49 ...`"
+        )
+
+    # No server role — try DB
+    from db import get_user_server
+    db_server = get_user_server(member.id)
+    if db_server:
+        return db_server, None
+
+    return None, (
+        "❌ Не удалось определить ваш сервер.\n"
+        "У вас нет роли сервера (1–90). Попросите администратора выполнить `/assignserver`."
+    )
+
+
 async def _post_form(
     interaction: discord.Interaction,
     moderator: discord.Member,
@@ -777,40 +817,35 @@ async def _post_form(
     evidence_url: str = "",
     server_override: str | None = None,
 ):
-    guild  = interaction.guild
-    cfg    = interaction.client.cfg
-    member = interaction.user
+    guild = interaction.guild
+    cfg   = interaction.client.cfg
 
-    server = server_override or get_server_for_member(member, cfg)
+    server, err = _resolve_server(interaction.user, cfg, server_override)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+
     is_ban = form_type in ("banform", "gbanform")
-    proof_ch = None
 
-    if server:
-        proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
-                    else get_proof_channel(guild, cfg, server))
-        if not proof_ch:
-            # Auto-create the server's category channels on first use
-            try:
-                await ensure_server_channels(guild, server, cfg)
-                proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
-                            else get_proof_channel(guild, cfg, server))
-            except discord.Forbidden:
-                pass
+    proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
+                else get_proof_channel(guild, cfg, server))
+
+    if not proof_ch:
+        # Auto-create channels for this server on first use
+        try:
+            await ensure_server_channels(guild, server, cfg)
+            proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
+                        else get_proof_channel(guild, cfg, server))
+        except discord.Forbidden:
+            pass
 
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
-        if server:
-            await interaction.followup.send(
-                f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
-                f"Попросите администратора запустить `/setupserver {server}`.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send(
-                "❌ Не удалось определить ваш сервер.\n"
-                "Попросите администратора выполнить `/assignserver`.",
-                ephemeral=True,
-            )
+        await interaction.followup.send(
+            f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
+            f"Попросите администратора запустить `/setupserver {server}`.",
+            ephemeral=True,
+        )
         return
 
     title      = _punishment_title(punishment)
@@ -859,14 +894,8 @@ class ProofCog(commands.Cog):
         seen_ids: set[int] = set()
         channels_to_check: list[discord.TextChannel] = []
 
+        # Only per-server channels — no legacy global proof_channel_id
         for guild_cfg in cfg.get("guilds", {}).values():
-            ch_id = guild_cfg.get("proof_channel_id", 0)
-            if ch_id and ch_id not in seen_ids:
-                ch = self.bot.get_channel(ch_id)
-                if isinstance(ch, discord.TextChannel):
-                    channels_to_check.append(ch)
-                    seen_ids.add(ch_id)
-
             for srv_data in guild_cfg.get("servers", {}).values():
                 for key in ("proof", "banform"):
                     srv_ch_id = srv_data.get(key, 0)
@@ -960,12 +989,13 @@ class ProofCog(commands.Cog):
         punishment="Срок бана",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
+        server="Номер сервера (если у вас несколько ролей серверов)",
     )
     @app_commands.choices(punishment=[
         app_commands.Choice(name="Бан 7 дней",  value="Бан 7 дней"),
         app_commands.Choice(name="Бан 15 дней", value="Бан 15 дней"),
     ])
-    @app_commands.autocomplete(rule=rule_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
     async def banform_cmd(
         self,
         interaction: discord.Interaction,
@@ -974,6 +1004,7 @@ class ProofCog(commands.Cog):
         punishment: str = "Бан 7 дней",
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
+        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -983,7 +1014,7 @@ class ProofCog(commands.Cog):
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         await _post_form(interaction, interaction.user, user, rule, punishment, "banform",
-                         evidence_url=ev_url)
+                         evidence_url=ev_url, server_override=server)
 
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
@@ -992,8 +1023,9 @@ class ProofCog(commands.Cog):
         rule="Пункт правил",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
+        server="Номер сервера (если у вас несколько ролей серверов)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
     async def gbanform_cmd(
         self,
         interaction: discord.Interaction,
@@ -1001,6 +1033,7 @@ class ProofCog(commands.Cog):
         rule: str,
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
+        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1010,7 +1043,7 @@ class ProofCog(commands.Cog):
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         await _post_form(interaction, interaction.user, user, rule, "Глобальная блокировка", "gbanform",
-                         evidence_url=ev_url)
+                         evidence_url=ev_url, server_override=server)
 
 
 async def setup(bot: commands.Bot):
