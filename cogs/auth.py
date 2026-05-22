@@ -77,9 +77,11 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         rank_expanded = RANK_ABBR.get(rank_val.lower(), rank_val)
 
         guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
-        review_ch_id = guild_cfg.get("auth_review_channel_id", 0)
+        review_ch_id  = guild_cfg.get("auth_review_channel_id", 0)
+        forum_ch_id   = guild_cfg.get("auth_forum_channel_id", 0)
 
-        if not review_ch_id:
+        # Need at least one destination configured
+        if not review_ch_id and not forum_ch_id:
             await interaction.response.send_message(
                 "❌ Канал рассмотрения заявок не настроен. Обратитесь к администратору.",
                 ephemeral=True,
@@ -105,7 +107,6 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         view = AuthReviewView(member.id)
 
         # Post to forum channel (per-server threads) or fallback to text channel
-        forum_ch_id = guild_cfg.get("auth_forum_channel_id", 0)
         forum_ch = interaction.guild.get_channel(forum_ch_id) if forum_ch_id else None
         if isinstance(forum_ch, discord.ForumChannel):
             await _post_auth_to_forum(forum_ch, guild_cfg, member, server_val, embed, view, self.bot.cfg, interaction.guild)
@@ -621,17 +622,24 @@ class AuthCog(commands.Cog):
                 reason="Канал авторизации",
             )
 
-        # Forum channel for auth applications (per-server threads)
+        # Forum channel — visible ONLY to Куратор/ЗГМ/ГМ.
+        # Must explicitly deny every other rank role, because the category
+        # has view_channel=True for @everyone which roles can inherit.
+        MGMT_NAMES = {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}
         forum_overwrites = {
             everyone: discord.PermissionOverwrite(view_channel=False),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
         }
-        mgmt_roles = [r for r in guild.roles
-                      if r.name in ("Куратор модерации", "Заместитель главного модератора", "Главный модератор")]
-        for r in mgmt_roles:
-            forum_overwrites[r] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, manage_threads=True
-            )
+        for r in guild.roles:
+            if r.name in RANKS:
+                if r.name in MGMT_NAMES:
+                    forum_overwrites[r] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, manage_threads=True
+                    )
+                else:
+                    forum_overwrites[r] = discord.PermissionOverwrite(view_channel=False)
+        if unverified:
+            forum_overwrites[unverified] = discord.PermissionOverwrite(view_channel=False)
 
         forum_ch = discord.utils.get(guild.forums, name="заявки-на-авторизацию", category=category)
         if not forum_ch:

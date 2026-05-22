@@ -412,18 +412,24 @@ class AdminCog(commands.Cog):
                 await auth_ch.send(view=AuthButtonView())
                 guild_cfg["auth_channel_id"] = auth_ch.id
 
-            # Forum-канал заявок
+            # Forum-канал заявок — явно запрещаем все ранговые роли кроме КМ/ЗГМ/ГМ
             if not guild_cfg.get("auth_forum_channel_id") or not guild.get_channel(guild_cfg["auth_forum_channel_id"]):
-                mgmt_roles = [r for r in guild.roles if r.name in ("Куратор модерации", "Заместитель главного модератора", "Главный модератора")]
+                MGMT_NAMES = {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}
                 f_ow = {
                     everyone: discord.PermissionOverwrite(view_channel=False),
                     guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
                 }
-                for r in mgmt_roles:
-                    f_ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True)
+                for r in guild.roles:
+                    if r.name in RANKS:
+                        if r.name in MGMT_NAMES:
+                            f_ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True)
+                        else:
+                            f_ow[r] = discord.PermissionOverwrite(view_channel=False)
+                if unverified:
+                    f_ow[unverified] = discord.PermissionOverwrite(view_channel=False)
                 forum_ch = await guild.create_forum(
                     name="заявки-на-авторизацию", category=category,
-                    topic="Заявки — ЗГМ/ГМ/Куратор", overwrites=f_ow,
+                    topic="Заявки — КМ/ЗГМ/ГМ", overwrites=f_ow,
                 )
                 guild_cfg["auth_forum_channel_id"] = forum_ch.id
 
