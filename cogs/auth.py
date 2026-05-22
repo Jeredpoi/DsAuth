@@ -1,3 +1,4 @@
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -588,6 +589,91 @@ class AuthCog(commands.Cog):
             e.add_field(name="Причина", value=reason, inline=False)
         e.add_field(name="Сняты роли", value=removed_names, inline=False)
         await self._log_event(interaction.guild, e)
+
+
+    # ─── /promote ─────────────────────────────────────────────────────────
+    @app_commands.command(name="promote", description="Изменить звание модератора")
+    @app_commands.describe(member="Модератор", rank="Новое звание")
+    @app_commands.choices(rank=[app_commands.Choice(name=r, value=r) for r in RANKS])
+    async def promote_cmd(self, interaction: discord.Interaction, member: discord.Member, rank: str):
+        is_owner = (
+            interaction.user.id == interaction.guild.owner_id
+            or interaction.user.id == getattr(self.bot, "owner_id_cfg", 0)
+        )
+        if not is_owner and get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
+            await interaction.response.send_message(
+                "❌ Команда доступна только **Заместителю главного модератора** и **Главному модератору**.",
+                ephemeral=True,
+            )
+            return
+
+        if member.id == interaction.user.id:
+            await interaction.response.send_message("❌ Нельзя изменить звание самому себе.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+
+        # Убираем все текущие ранговые роли
+        old_rank_roles = [r for r in member.roles if r.name in RANKS]
+        old_rank = old_rank_roles[0].name if old_rank_roles else None
+
+        # Создаём новую роль если нет
+        rank_role = discord.utils.get(guild.roles, name=rank)
+        if not rank_role:
+            rank_role = await guild.create_role(
+                name=rank, color=RANK_COLOR, hoist=True,
+                reason="Автосоздание роли при смене звания",
+            )
+
+        try:
+            if old_rank_roles:
+                await member.remove_roles(*old_rank_roles, reason=f"Смена звания: {interaction.user}")
+            await member.add_roles(rank_role, reason=f"Новое звание: {rank} ({interaction.user})")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Нет прав для управления ролями.", ephemeral=True)
+            return
+
+        # Парсим сервер из текущего ника или берём из БД
+        nick_match = re.match(r'^\[.+?\s*\|\s*(\d+)\]\s*(.*)', member.display_name)
+        if nick_match:
+            server_num = nick_match.group(1)
+            display_name = nick_match.group(2)
+        else:
+            server_num = db.get_user_server(member.id)
+            display_name = member.display_name
+
+        if server_num:
+            abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
+            prefix = f"[{abbr} | {server_num}] "
+            display = display_name[:max(0, 32 - len(prefix))]
+            try:
+                await member.edit(nick=prefix + display, reason="Автоник при смене звания")
+            except discord.Forbidden:
+                pass
+            db.set_user_server(member.id, server_num, rank)
+
+        change = f"{old_rank or '—'} → **{rank}**"
+        await interaction.followup.send(
+            f"✅ Звание **{member}** изменено: {change}.", ephemeral=True
+        )
+
+        try:
+            await member.send(
+                f"📋 Ваше звание на **{guild.name}** изменено.\n"
+                f"Новое звание: **{rank}**\n"
+                f"Изменил: **{interaction.user}**"
+            )
+        except discord.Forbidden:
+            pass
+
+        e = discord.Embed(title="📋 Смена звания", color=0x9B59B6,
+                          timestamp=discord.utils.utcnow())
+        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
+        e.add_field(name="Звание", value=change, inline=True)
+        e.add_field(name="Изменил", value=str(interaction.user), inline=False)
+        await self._log_event(guild, e)
 
 
 async def setup(bot: commands.Bot):

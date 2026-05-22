@@ -71,7 +71,10 @@ def _build_commands_embed() -> discord.Embed:
     )
     embed.add_field(
         name="👥 Авторизация",
-        value="`/dismiss` — исключить модератора из команды (ЗГМ+)",
+        value=(
+            "`/promote` — изменить звание модератора (ЗГМ+)\n"
+            "`/dismiss` — исключить модератора из команды (ЗГМ+)"
+        ),
         inline=False,
     )
     embed.add_field(
