@@ -73,15 +73,31 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
 
     embed = discord.Embed(title="📡 Статус бота", color=0x2ECC71,
                           timestamp=discord.utils.utcnow())
-    embed.add_field(name="🕐 Аптайм",          value=uptime_str,                       inline=True)
-    embed.add_field(name="📶 Пинг",            value=f"{round(bot.latency * 1000)} мс", inline=True)
-    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)),              inline=True)
-    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())),      inline=True)
-    embed.add_field(name="📋 Форм всего",       value=str(total_forms),                 inline=True)
-    embed.add_field(name="✅ Одобрено форм",    value=str(approved_forms),              inline=True)
+    embed.add_field(name="🕐 Аптайм",          value=uptime_str,                        inline=True)
+    embed.add_field(name="📶 Пинг",            value=f"{round(bot.latency * 1000)} мс",  inline=True)
+    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)),               inline=True)
+    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())),       inline=True)
+    embed.add_field(name="📋 Форм всего",       value=str(total_forms),                  inline=True)
+    embed.add_field(name="✅ Одобрено форм",    value=str(approved_forms),               inline=True)
     embed.set_footer(text="Обновлено")
+
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    msg_id = guild_cfg.get("status_message_id", 0)
+
+    # Try to edit existing message
+    if msg_id:
+        try:
+            msg = await ch.fetch_message(msg_id)
+            await msg.edit(embed=embed)
+            return
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            guild_cfg["status_message_id"] = 0
+
+    # Send new message and save its ID
     try:
-        await ch.send(embed=embed)
+        msg = await ch.send(embed=embed)
+        guild_cfg["status_message_id"] = msg.id
+        save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
