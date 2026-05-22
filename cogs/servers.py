@@ -295,7 +295,10 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             topic=f"Логи наказаний — сервер {server}",
         )
     else:
-        await ch.edit(overwrites=log_ow)
+        try:
+            await ch.edit(overwrites=log_ow)
+        except discord.Forbidden:
+            pass
     channel_ids["logs"] = ch.id
 
     auth_ow = {
@@ -314,7 +317,10 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             topic=f"Заявки на авторизацию — сервер {server}",
         )
     else:
-        await ch.edit(overwrites=auth_ow)
+        try:
+            await ch.edit(overwrites=auth_ow)
+        except discord.Forbidden:
+            pass
     channel_ids["auth"] = ch.id
 
     for i in (1, 2):

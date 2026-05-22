@@ -408,12 +408,10 @@ class AdminCog(commands.Cog):
             existing_auth_ch_id = guild_cfg.get("auth_channel_id", 0)
             auth_ch = guild.get_channel(existing_auth_ch_id) if existing_auth_ch_id else None
             if not auth_ch:
-                # Fallback: find by name (handles stale/missing config ID)
+                # Fallback: find by name within the auth category only (never guild-wide — too risky)
                 auth_cat = discord.utils.get(guild.categories, name="🔐 Авторизация")
                 if auth_cat:
                     auth_ch = discord.utils.get(guild.text_channels, name="авторизация", category=auth_cat)
-                if not auth_ch:
-                    auth_ch = discord.utils.get(guild.text_channels, name="авторизация")
                 if auth_ch:
                     guild_cfg["auth_channel_id"] = auth_ch.id  # update stale config
             if not auth_ch:

@@ -375,7 +375,7 @@ class AuthCog(commands.Cog):
 
         if custom_id.startswith("auth:approve:"):
             user_id = int(custom_id.split(":")[2])
-            rank = interaction.data.get("values", [None])[0]
+            rank = (interaction.data.get("values") or [None])[0]
             await self._handle_approve(interaction, user_id, rank)
 
         elif custom_id.startswith("auth:reject:"):
@@ -402,10 +402,6 @@ class AuthCog(commands.Cog):
             await self._disable_review(interaction, approved=False, label="Покинул сервер")
             await interaction.followup.send("❌ Пользователь покинул сервер.", ephemeral=True)
             return
-
-        unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
-        if unverified and unverified in member.roles:
-            await member.remove_roles(unverified, reason="Авторизация одобрена")
 
         mod_perms = discord.Permissions(manage_messages=True)
         rank_role = None
@@ -438,6 +434,8 @@ class AuthCog(commands.Cog):
         team_role_id = guild_cfg_cur.get("team_role_id", 0)
         team_role = guild.get_role(team_role_id) if team_role_id else None
 
+        unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
+
         role_error = None
         if server_num and server_num.isdigit():
             try:
@@ -457,6 +455,9 @@ class AuthCog(commands.Cog):
                     except discord.Forbidden:
                         pass
                 roles_to_add = [r for r in (rank_role, server_role, team_role) if r]
+                # Remove unverified and add new roles atomically — only mutate member if add succeeds
+                if unverified and unverified in member.roles:
+                    await member.remove_roles(unverified, reason="Авторизация одобрена")
                 if roles_to_add:
                     await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             except discord.Forbidden:
@@ -464,11 +465,15 @@ class AuthCog(commands.Cog):
             except Exception as e:
                 role_error = f"❌ Ошибка при выдаче роли сервера: {e}"
 
-            db.set_user_server(member.id, server_num, rank or "")
-            db.clear_auth_cooldown(member.id)
+            # DB writes only when no role error, to keep DB consistent with actual role state
+            if not role_error:
+                db.set_user_server(member.id, server_num, rank or "")
+                db.clear_auth_cooldown(member.id)
 
         elif rank_role:
             roles_to_add = [r for r in (rank_role, team_role) if r]
+            if unverified and unverified in member.roles:
+                await member.remove_roles(unverified, reason="Авторизация одобрена")
             await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             db.clear_auth_cooldown(member.id)
 
