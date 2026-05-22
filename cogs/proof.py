@@ -485,10 +485,9 @@ FORM_LEADER_MIN_LEVEL     = 4     # КМ+ can delete any form at any time
 
 async def _log_form_deletion(
     interaction: discord.Interaction,
-    proof_message: discord.Message,
+    data: dict,
     by_leader: bool,
 ) -> None:
-    data      = _extract_v2_data(proof_message)
     title     = data.get("title", "Наказание")
     user_id   = data.get("user_id", 0)
     punishment = data.get("punishment", "?")
@@ -524,13 +523,15 @@ class LeaderManageView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
     async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Extract log data before deletion while components are guaranteed accessible
+        log_data = _extract_v2_data(self.proof_message)
         try:
             await self.proof_message.delete()
         except (discord.Forbidden, discord.HTTPException):
             await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, self.proof_message, by_leader=True)
+        await _log_form_deletion(interaction, log_data, by_leader=True)
 
 
 # ─── Owner management panel ───────────────────────────────────────────────────
@@ -556,13 +557,15 @@ class OwnerManageView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        # Extract log data before deletion
+        log_data = _extract_v2_data(self.proof_message)
         try:
             await self.proof_message.delete()
         except (discord.Forbidden, discord.HTTPException):
             await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, self.proof_message, by_leader=False)
+        await _log_form_deletion(interaction, log_data, by_leader=False)
 
 
 # ─── Button callbacks ─────────────────────────────────────────────────────────

@@ -407,14 +407,24 @@ class AuthCog(commands.Cog):
         if unverified and unverified in member.roles:
             await member.remove_roles(unverified, reason="Авторизация одобрена")
 
+        mod_perms = discord.Permissions(manage_messages=True)
         rank_role = None
         if rank:
             rank_role = discord.utils.get(guild.roles, name=rank)
             if not rank_role:
                 rank_role = await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
+                    permissions=mod_perms,
                     reason="Автосоздание роли авторизации",
                 )
+            elif not rank_role.permissions.manage_messages:
+                try:
+                    await rank_role.edit(
+                        permissions=discord.Permissions(rank_role.permissions.value | mod_perms.value),
+                        reason="Обновление: добавление manage_messages",
+                    )
+                except discord.Forbidden:
+                    pass
 
         server_num = None
         if interaction.message.embeds:
@@ -435,8 +445,17 @@ class AuthCog(commands.Cog):
                 if not server_role:
                     server_role = await guild.create_role(
                         name=server_num, color=discord.Color.green(),
-                        hoist=True, reason=f"Авторизация на сервер {server_num}",
+                        hoist=True, permissions=mod_perms,
+                        reason=f"Авторизация на сервер {server_num}",
                     )
+                elif not server_role.permissions.manage_messages:
+                    try:
+                        await server_role.edit(
+                            permissions=discord.Permissions(server_role.permissions.value | mod_perms.value),
+                            reason="Обновление: добавление manage_messages",
+                        )
+                    except discord.Forbidden:
+                        pass
                 roles_to_add = [r for r in (rank_role, server_role, team_role) if r]
                 if roles_to_add:
                     await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
@@ -827,13 +846,23 @@ class AuthCog(commands.Cog):
         old_rank_roles = [r for r in member.roles if r.name in RANKS]
         old_rank = old_rank_roles[0].name if old_rank_roles else None
 
-        # Создаём новую роль если нет
+        # Создаём новую роль если нет (с manage_messages чтобы команды были видны)
+        _mod_perms = discord.Permissions(manage_messages=True)
         rank_role = discord.utils.get(guild.roles, name=rank)
         if not rank_role:
             rank_role = await guild.create_role(
                 name=rank, color=RANK_COLOR, hoist=True,
+                permissions=_mod_perms,
                 reason="Автосоздание роли при смене звания",
             )
+        elif not rank_role.permissions.manage_messages:
+            try:
+                await rank_role.edit(
+                    permissions=discord.Permissions(rank_role.permissions.value | _mod_perms.value),
+                    reason="Обновление: добавление manage_messages",
+                )
+            except discord.Forbidden:
+                pass
 
         guild_cfg_p = get_guild_cfg(self.bot.cfg, guild.id)
         team_role_p = guild.get_role(guild_cfg_p.get("team_role_id", 0) or 0)
