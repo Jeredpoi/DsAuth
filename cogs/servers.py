@@ -44,6 +44,35 @@ def get_banform_channel(guild: discord.Guild, cfg: dict, server: str) -> discord
     return None
 
 
+def get_monitoring_channel(guild: discord.Guild, cfg: dict, name: str) -> discord.TextChannel | None:
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    ch_id = guild_cfg.get("monitoring", {}).get(name, 0)
+    ch = guild.get_channel(ch_id) if ch_id else None
+    if ch:
+        return ch
+    category = discord.utils.get(guild.categories, name=MONITORING_CATEGORY)
+    if category:
+        return discord.utils.get(guild.text_channels, name=name, category=category)
+    return None
+
+
+async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
+    ch = get_monitoring_channel(guild, cfg, "📡-статус-бота")
+    if not ch:
+        return
+    from db import all_user_servers
+    embed = discord.Embed(title="📡 Статус бота", color=0x2ECC71,
+                          timestamp=discord.utils.utcnow())
+    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)), inline=True)
+    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())), inline=True)
+    embed.add_field(name="📶 Пинг", value=f"{round(bot.latency * 1000)} мс", inline=True)
+    embed.set_footer(text="Обновлено")
+    try:
+        await ch.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
 def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
     guild_cfg = get_guild_cfg(cfg, guild.id)
     ch_id = guild_cfg.get("servers", {}).get(server, {}).get("logs")
@@ -377,6 +406,7 @@ class ServersCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
             try:
                 await _ensure_monitoring_category(interaction.guild, self.bot.cfg)
+                await post_monitoring_status(interaction.guild, self.bot.cfg, self.bot)
                 await interaction.followup.send(
                     f"✅ Категория **{MONITORING_CATEGORY}** создана/обновлена.", ephemeral=True
                 )

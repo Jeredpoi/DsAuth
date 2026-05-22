@@ -11,25 +11,35 @@ ANNOUNCE_COLOR = 0x5865F2
 
 # ─── Embed builders ───────────────────────────────────────────────────────────
 
-SERVER_RULES: list[str] = [
-    "Воздерживайтесь от оскорблений других участников",
-    "Не отправляйте контент 18+",
-    "Не спамьте сообщениями",
-    "Не пытайтесь крашнуть бота",
+SERVER_RULES: list[tuple[str, str]] = [
+    ("🚫", "Воздерживайтесь от оскорблений других участников"),
+    ("🔞", "Запрещён любой контент 18+"),
+    ("💬", "Не спамьте сообщениями и не флудьте"),
+    ("🤖", "Не пытайтесь нарушить работу бота"),
 ]
+
+_SEP = "┄" * 26
 
 
 def _build_rules_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📖 Правила сервера",
+        description=(
+            "Добро пожаловать на сервер команды модерации.\n"
+            "Пожалуйста, ознакомьтесь с правилами и соблюдайте их.\n"
+            f"`{_SEP}`"
+        ),
         color=INFO_COLOR,
+        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(
-        name="📋 Общие правила",
-        value="\n".join(f"`{i+1}.` {rule}" for i, rule in enumerate(SERVER_RULES)),
-        inline=False,
-    )
-    embed.set_footer(text="Правила обновлены автоматически")
+    for i, (emoji, text) in enumerate(SERVER_RULES, 1):
+        embed.add_field(
+            name=f"{emoji} Правило {i}",
+            value=f"> {text}",
+            inline=False,
+        )
+    embed.add_field(name=f"`{_SEP}`", value="⚠️ **Нарушение правил влечёт исключение с сервера.**", inline=False)
+    embed.set_footer(text="Последнее обновление")
     return embed
 
 

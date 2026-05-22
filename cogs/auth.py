@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 from datetime import timedelta
 
 from helpers import save_config, get_guild_cfg, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME, get_member_rank_level
-from cogs.servers import is_server_role
+from cogs.servers import is_server_role, get_monitoring_channel
 import db
 
 RANK_ABBR: dict[str, str] = {
@@ -173,6 +173,14 @@ class AuthCog(commands.Cog):
     def cog_unload(self):
         self.autokick_loop.cancel()
 
+    async def _log_event(self, guild: discord.Guild, embed: discord.Embed) -> None:
+        ch = get_monitoring_channel(guild, self.bot.cfg, "🔔-авторизации")
+        if ch:
+            try:
+                await ch.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
     # ─── Автокик неавторизованных ─────────────────────────────────────────
     @tasks.loop(hours=1)
     async def autokick_loop(self):
@@ -197,6 +205,11 @@ class AuthCog(commands.Cog):
                     except discord.Forbidden:
                         pass
                     await guild.kick(member, reason=f"Не авторизован за {AUTOKICK_DAYS} дня")
+                    e = discord.Embed(title="⚡ Автокик", color=0xE74C3C,
+                                      timestamp=discord.utils.utcnow())
+                    e.add_field(name="Участник", value=f"{member} (`{member.id}`)", inline=False)
+                    e.add_field(name="Причина", value=f"Не авторизован в течение {AUTOKICK_DAYS} дней", inline=False)
+                    await self._log_event(guild, e)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -315,6 +328,14 @@ class AuthCog(commands.Cog):
             msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
         await interaction.followup.send(msg, ephemeral=True)
 
+        e = discord.Embed(title="✅ Авторизация одобрена", color=0x2ECC71,
+                          timestamp=discord.utils.utcnow())
+        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
+        e.add_field(name="Должность", value=rank or "—", inline=True)
+        e.add_field(name="Сервер", value=server_num or "—", inline=True)
+        e.add_field(name="Одобрил", value=str(interaction.user), inline=False)
+        await self._log_event(interaction.guild, e)
+
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
         await interaction.response.defer(ephemeral=True)
         member = interaction.guild.get_member(user_id)
@@ -334,6 +355,15 @@ class AuthCog(commands.Cog):
             except discord.Forbidden:
                 pass
         await interaction.followup.send("❌ Заявка отклонена.", ephemeral=True)
+
+        e = discord.Embed(title="❌ Заявка отклонена", color=0xE74C3C,
+                          timestamp=discord.utils.utcnow())
+        e.add_field(name="Участник",
+                    value=f"{member.mention} (`{user_id}`)" if member else f"`{user_id}`",
+                    inline=True)
+        e.add_field(name="Отклонил", value=str(interaction.user), inline=True)
+        e.add_field(name="Cooldown", value=f"{AUTH_COOLDOWN_HOURS}ч", inline=True)
+        await self._log_event(interaction.guild, e)
 
     async def _disable_review(self, interaction: discord.Interaction, approved: bool, label: str):
         if not interaction.message.embeds:
@@ -549,6 +579,15 @@ class AuthCog(commands.Cog):
             f"Прощальное сообщение отправлено в ЛС.",
             ephemeral=True,
         )
+
+        e = discord.Embed(title="🔵 Исключение из команды", color=0x3498DB,
+                          timestamp=discord.utils.utcnow())
+        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
+        e.add_field(name="Исключил", value=str(interaction.user), inline=True)
+        if reason:
+            e.add_field(name="Причина", value=reason, inline=False)
+        e.add_field(name="Сняты роли", value=removed_names, inline=False)
+        await self._log_event(interaction.guild, e)
 
 
 async def setup(bot: commands.Bot):
