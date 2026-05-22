@@ -71,19 +71,12 @@ def _build_commands_embed() -> discord.Embed:
     )
     embed.add_field(
         name="👥 Авторизация",
-        value=(
-            "`/setup-auth` — настроить систему авторизации (владелец)\n"
-            "`/dismiss` — исключить модератора из команды (ЗГМ+)"
-        ),
+        value="`/dismiss` — исключить модератора из команды (ЗГМ+)",
         inline=False,
     )
     embed.add_field(
         name="🛠️ Серверы",
-        value=(
-            "`/setupserver` — создать каналы сервера (владелец)\n"
-            "`/cleanupserver` — удалить дубли каналов (владелец)\n"
-            "`/listmods` — список модераторов по серверам"
-        ),
+        value="`/listmods` — список модераторов по серверам",
         inline=False,
     )
     embed.set_footer(text="Параметры команд смотрите в описании при вводе /")
