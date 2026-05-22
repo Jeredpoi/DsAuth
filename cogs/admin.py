@@ -18,6 +18,9 @@ FORM_TYPES = {
     "gban":    "Глобальный бан",
 }
 
+_ADMIN_PERM = app_commands.default_permissions(administrator=True)
+_LEAD_PERM  = app_commands.default_permissions(manage_roles=True)
+
 
 # ─── Модальное окно редактирования правила ────────────────────────────────────
 
@@ -90,6 +93,7 @@ class AdminCog(commands.Cog):
         return uid in (global_owner, guild_owner)
 
     # ─── /sync ────────────────────────────────────────────────────────────
+    @_ADMIN_PERM
     @app_commands.command(name="sync", description="Синхронизировать команды на этом сервере")
     async def sync_slash(self, interaction: discord.Interaction):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
@@ -100,7 +104,8 @@ class AdminCog(commands.Cog):
         await interaction.followup.send(f"✅ Синхронизировано {len(synced)} команд.", ephemeral=True)
 
     # ─── /setup ───────────────────────────────────────────────────────────
-    @app_commands.command(name="setup", description="Настройка бота (только для владельца)")
+    @_ADMIN_PERM
+    @app_commands.command(name="setup", description="Настройка бота")
     @app_commands.describe(
         proof_channel="Канал для форм наказаний (proof)",
         banform_channel="Канал для форм банов (banform/gbanform)",
@@ -136,7 +141,7 @@ class AdminCog(commands.Cog):
         proof_ch   = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
         banform_ch = interaction.guild.get_channel(guild_cfg.get("banform_channel_id", 0))
         lines = [
-            f"✅ **Настройки сохранены**:",
+            "✅ **Настройки сохранены**:",
             f"• Канал proof: {proof_ch.mention if proof_ch else '❌ не задан'}",
             f"• Канал banform: {banform_ch.mention if banform_ch else '❌ не задан'}",
             f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`",
@@ -146,7 +151,8 @@ class AdminCog(commands.Cog):
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     # ─── /assignserver ────────────────────────────────────────────────────
-    @app_commands.command(name="assignserver", description="Вручную привязать участника к серверу (только владелец)")
+    @_ADMIN_PERM
+    @app_commands.command(name="assignserver", description="Вручную привязать участника к серверу")
     @app_commands.describe(member="Участник", server="Номер сервера (1–90)")
     async def assignserver_cmd(self, interaction: discord.Interaction, member: discord.Member, server: str):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
@@ -157,16 +163,14 @@ class AdminCog(commands.Cog):
             return
 
         db.set_user_server(member.id, server)
-
         await interaction.response.send_message(
-            f"✅ {member.mention} привязан к серверу **{server}** в базе данных.\n"
-            f"Теперь `/proof` будет направлять формы в канал сервера {server}.",
-            ephemeral=True,
+            f"✅ {member.mention} привязан к серверу **{server}**.", ephemeral=True
         )
 
     # ─── /setform ─────────────────────────────────────────────────────────
-    @app_commands.command(name="setform", description="Настроить шаблон формы (только для владельца)")
-    @app_commands.describe(type="Тип наказания для которого настраивается шаблон")
+    @_ADMIN_PERM
+    @app_commands.command(name="setform", description="Настроить шаблон формы")
+    @app_commands.describe(type="Тип наказания")
     @app_commands.choices(type=[
         app_commands.Choice(name=label, value=key)
         for key, label in FORM_TYPES.items()
@@ -175,12 +179,11 @@ class AdminCog(commands.Cog):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
-
         current = self.bot.cfg.get("templates", {}).get(type, "")
-        modal = FormTemplateModal(self.bot, type, current)
-        await interaction.response.send_modal(modal)
+        await interaction.response.send_modal(FormTemplateModal(self.bot, type, current))
 
     # ─── /showform ────────────────────────────────────────────────────────
+    @_ADMIN_PERM
     @app_commands.command(name="showform", description="Показать текущий шаблон формы")
     @app_commands.describe(type="Тип наказания")
     @app_commands.choices(type=[
@@ -191,7 +194,6 @@ class AdminCog(commands.Cog):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
-
         template = self.bot.cfg.get("templates", {}).get(type, "") or DEFAULT_TEMPLATE
         label = FORM_TYPES.get(type, type)
         await interaction.response.send_message(
@@ -203,7 +205,8 @@ class AdminCog(commands.Cog):
         )
 
     # ─── /editrule ────────────────────────────────────────────────────────
-    @app_commands.command(name="editrule", description="Добавить или изменить правило (только владелец)")
+    @_ADMIN_PERM
+    @app_commands.command(name="editrule", description="Добавить или изменить правило")
     async def editrule_cmd(self, interaction: discord.Interaction):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
@@ -211,17 +214,19 @@ class AdminCog(commands.Cog):
         await interaction.response.send_modal(EditRuleModal(self.bot))
 
     # ─── /uptime ──────────────────────────────────────────────────────────
+    @_ADMIN_PERM
     @app_commands.command(name="uptime", description="Время работы бота")
     async def uptime_cmd(self, interaction: discord.Interaction):
         elapsed = int(time.time() - START_TIME)
         h, rem = divmod(elapsed, 3600)
         m, s = divmod(rem, 60)
         await interaction.response.send_message(
-            f"⏱️ Бот работает: **{h}ч {m}м {s}с**"
+            f"⏱️ Бот работает: **{h}ч {m}м {s}с**", ephemeral=True
         )
 
     # ─── /debugconfig ─────────────────────────────────────────────────────
-    @app_commands.command(name="debugconfig", description="Показать конфиг и роли участника (только владелец)")
+    @_ADMIN_PERM
+    @app_commands.command(name="debugconfig", description="Показать конфиг и роли участника")
     @app_commands.describe(member="Участник для проверки (по умолчанию — вы)")
     async def debugconfig_cmd(self, interaction: discord.Interaction, member: discord.Member | None = None):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
@@ -230,21 +235,24 @@ class AdminCog(commands.Cog):
 
         target = member or interaction.user
         guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
-
         server_roles = [r.name for r in target.roles if r.name.isdigit() and 1 <= int(r.name) <= 90]
-        rank_roles = [r.name for r in target.roles if r.name in ("Младший модератор", "Модератор", "Старший модератор", "Куратор модерации", "Заместитель главного модератора", "Главный модератор")]
-
+        rank_roles   = [r.name for r in target.roles if r.name in (
+            "Младший модератор", "Модератор", "Старший модератор",
+            "Куратор модерации", "Заместитель главного модератора", "Главный модератор",
+        )]
         user_server_db = db.get_user_server(target.id) or "—"
-        proof_ch_id = guild_cfg.get("proof_channel_id", 0)
-        proof_ch = interaction.guild.get_channel(proof_ch_id)
-        servers_cfg = guild_cfg.get("servers", {})
-
+        proof_ch_id    = guild_cfg.get("proof_channel_id", 0)
+        banform_ch_id  = guild_cfg.get("banform_channel_id", 0)
+        proof_ch       = interaction.guild.get_channel(proof_ch_id)
+        banform_ch     = interaction.guild.get_channel(banform_ch_id)
+        servers_cfg    = guild_cfg.get("servers", {})
         lines = [
             f"**Участник:** {target.mention} (`{target.id}`)",
             f"**Роли сервера (1-90):** {', '.join(server_roles) or 'нет'}",
             f"**Роли должности:** {', '.join(rank_roles) or 'нет'}",
-            f"**user_servers в конфиге:** `{user_server_db}`",
-            f"**proof_channel_id:** {proof_ch.mention if proof_ch else f'не найден (id={proof_ch_id})'}",
+            f"**user_server в БД:** `{user_server_db}`",
+            f"**proof_channel:** {proof_ch.mention if proof_ch else f'не найден (id={proof_ch_id})'}",
+            f"**banform_channel:** {banform_ch.mention if banform_ch else f'не найден (id={banform_ch_id})'}",
             f"**Серверные каналы в конфиге:** {', '.join(servers_cfg.keys()) or 'нет'}",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)

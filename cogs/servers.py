@@ -363,6 +363,7 @@ class ServersCog(commands.Cog):
         uid = interaction.user.id
         return uid == interaction.guild.owner_id or uid == getattr(self.bot, "owner_id_cfg", 0)
 
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="setupserver", description="Создать каналы для сервера вручную")
     @app_commands.describe(server="Номер сервера (1–90)")
     async def setupserver_cmd(self, interaction: discord.Interaction, server: str):
@@ -379,6 +380,7 @@ class ServersCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
 
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="manage-category", description="Управление категориями серверов")
     @app_commands.describe(
         action="Действие",
@@ -443,6 +445,7 @@ class ServersCog(commands.Cog):
             except discord.Forbidden:
                 await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
 
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="cleanupserver", description="Удалить дублирующиеся каналы сервера")
     @app_commands.describe(server="Номер сервера (1–90)")
     async def cleanupserver_cmd(self, interaction: discord.Interaction, server: str):

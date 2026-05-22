@@ -410,6 +410,7 @@ class AuthCog(commands.Cog):
             pass
 
     # ─── /setup-auth ───────────────────────────────────────────────────────
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="setup-auth", description="Настроить систему авторизации на этом сервере")
     async def setup_auth_cmd(self, interaction: discord.Interaction):
         guild = interaction.guild
@@ -536,6 +537,7 @@ class AuthCog(commands.Cog):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     # ─── /dismiss ─────────────────────────────────────────────────────────
+    @app_commands.default_permissions(manage_roles=True)
     @app_commands.command(name="dismiss", description="Исключить модератора по собственному желанию")
     @app_commands.describe(
         member="Модератор, покидающий команду",
@@ -610,6 +612,7 @@ class AuthCog(commands.Cog):
 
 
     # ─── /promote ─────────────────────────────────────────────────────────
+    @app_commands.default_permissions(manage_roles=True)
     @app_commands.command(name="promote", description="Изменить звание модератора")
     @app_commands.describe(member="Модератор", rank="Новое звание")
     @app_commands.choices(rank=[app_commands.Choice(name=r, value=r) for r in RANKS])

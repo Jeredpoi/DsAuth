@@ -144,6 +144,7 @@ class InfoCog(commands.Cog):
         return interaction.guild.get_channel(ch_id) if ch_id else None
 
     # ─── /setup-info ──────────────────────────────────────────────────────
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="setup-info", description="Создать информационную категорию (владелец)")
     async def setup_info_cmd(self, interaction: discord.Interaction):
         if not self._is_owner(interaction):
@@ -225,6 +226,7 @@ class InfoCog(commands.Cog):
         )
 
     # ─── /update-rules ────────────────────────────────────────────────────
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="update-rules", description="Обновить embed правил в канале (владелец)")
     async def update_rules_cmd(self, interaction: discord.Interaction):
         if not self._is_owner(interaction):
@@ -255,6 +257,7 @@ class InfoCog(commands.Cog):
         await interaction.followup.send(f"✅ Правила обновлены в {ch.mention}.", ephemeral=True)
 
     # ─── /announce ────────────────────────────────────────────────────────
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="announce", description="Отправить объявление в канал объявлений (только владелец)")
     async def announce_cmd(self, interaction: discord.Interaction):
         if not self._is_owner(interaction):
