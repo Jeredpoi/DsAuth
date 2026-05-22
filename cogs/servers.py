@@ -148,9 +148,8 @@ async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
         readonly_all[r] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
     channels = [
-        ("📡-статус-бота",   "Статус и аптайм бота",                          readonly_lead),
-        ("🔔-авторизации",   "Журнал авторизаций, кандидатов и кик-логов",     readonly_all),
-        ("📋-журнал-команд", "Лог административных действий",                   readonly_lead),
+        ("📡-статус-бота", "Статус и аптайм бота",                      readonly_lead),
+        ("🔔-авторизации", "Журнал авторизаций, кандидатов и кик-логов", readonly_all),
     ]
     guild_cfg = get_guild_cfg(cfg, guild.id)
     monitoring_ids = guild_cfg.setdefault("monitoring", {})

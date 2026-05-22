@@ -18,29 +18,35 @@ SERVER_RULES: list[tuple[str, str]] = [
     ("🤖", "Не пытайтесь нарушить работу бота"),
 ]
 
-_SEP = "┄" * 26
+def _build_rule_embeds() -> list[discord.Embed]:
+    embeds: list[discord.Embed] = []
 
-
-def _build_rules_embed() -> discord.Embed:
-    embed = discord.Embed(
+    header = discord.Embed(
         title="📖 Правила сервера",
         description=(
             "Добро пожаловать на сервер команды модерации.\n"
-            "Пожалуйста, ознакомьтесь с правилами и соблюдайте их.\n"
-            f"`{_SEP}`"
+            "Пожалуйста, ознакомьтесь с правилами и соблюдайте их."
         ),
         color=INFO_COLOR,
         timestamp=discord.utils.utcnow(),
     )
+    header.set_footer(text="Последнее обновление")
+    embeds.append(header)
+
     for i, (emoji, text) in enumerate(SERVER_RULES, 1):
-        embed.add_field(
-            name=f"{emoji} Правило {i}",
-            value=f"> {text}",
-            inline=False,
+        e = discord.Embed(
+            title=f"{emoji} Правило {i}",
+            description=f"> {text}",
+            color=INFO_COLOR,
         )
-    embed.add_field(name=f"`{_SEP}`", value="⚠️ **Нарушение правил влечёт исключение с сервера.**", inline=False)
-    embed.set_footer(text="Последнее обновление")
-    return embed
+        embeds.append(e)
+
+    footer = discord.Embed(
+        description="⚠️ **Нарушение правил влечёт исключение с сервера.**",
+        color=0xED4245,
+    )
+    embeds.append(footer)
+    return embeds
 
 
 def _build_commands_embed() -> discord.Embed:
@@ -77,19 +83,6 @@ def _build_commands_embed() -> discord.Embed:
             "`/setupserver` — создать каналы сервера (владелец)\n"
             "`/cleanupserver` — удалить дубли каналов (владелец)\n"
             "`/listmods` — список модераторов по серверам"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="⚙️ Администрирование",
-        value=(
-            "`/setup` — основные настройки бота\n"
-            "`/setform` — шаблон формы наказания\n"
-            "`/editrule` — добавить / изменить правило\n"
-            "`/assignserver` — вручную привязать модератора к серверу\n"
-            "`/announce` — отправить объявление (ЗГМ+)\n"
-            "`/update-rules` — обновить embed правил\n"
-            "`/uptime` — время работы бота"
         ),
         inline=False,
     )
@@ -166,7 +159,6 @@ class InfoCog(commands.Cog):
         guild = interaction.guild
         everyone = guild.default_role
         read_only = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-        hidden    = discord.PermissionOverwrite(view_channel=False)
         bot_ow    = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
 
         # Category
@@ -188,18 +180,9 @@ class InfoCog(commands.Cog):
                 topic="Правила команды модерации",
                 overwrites={everyone: read_only, guild.me: bot_ow},
             )
-        msg_id = ids.get("rules_msg_id", 0)
-        existing = None
-        if msg_id:
-            try:
-                existing = await ch_rules.fetch_message(msg_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                existing = None
-        if existing:
-            await existing.edit(embed=_build_rules_embed())
-        else:
-            msg = await ch_rules.send(embed=_build_rules_embed())
-            ids["rules_msg_id"] = msg.id
+        await ch_rules.purge(limit=50)
+        for embed in _build_rule_embeds():
+            await ch_rules.send(embed=embed)
         ids["rules_channel_id"] = ch_rules.id
 
         # 📢 Объявления
@@ -256,8 +239,7 @@ class InfoCog(commands.Cog):
 
         guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         ids = guild_cfg.get("info_channels", {})
-        ch_id  = ids.get("rules_channel_id", 0)
-        msg_id = ids.get("rules_msg_id", 0)
+        ch_id = ids.get("rules_channel_id", 0)
 
         if not ch_id:
             await interaction.followup.send(
@@ -270,13 +252,9 @@ class InfoCog(commands.Cog):
             await interaction.followup.send("❌ Канал правил недоступен.", ephemeral=True)
             return
 
-        try:
-            msg = await ch.fetch_message(msg_id)
-            await msg.edit(embed=_build_rules_embed())
-        except (discord.NotFound, discord.HTTPException):
-            msg = await ch.send(embed=_build_rules_embed())
-            guild_cfg.setdefault("info_channels", {})["rules_msg_id"] = msg.id
-            save_config(self.bot.cfg)
+        await ch.purge(limit=50)
+        for embed in _build_rule_embeds():
+            await ch.send(embed=embed)
 
         await interaction.followup.send(f"✅ Правила обновлены в {ch.mention}.", ephemeral=True)
 
