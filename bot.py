@@ -36,6 +36,7 @@ async def main():
         await bot.load_extension("cogs.servers")
         await bot.load_extension("cogs.stats")
         await bot.load_extension("cogs.info")
+        await bot.load_extension("cogs.context_menus")
         await bot.start(TOKEN)
 
 

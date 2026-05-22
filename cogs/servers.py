@@ -327,13 +327,29 @@ class DeleteCategoryView(discord.ui.View):
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
 
+async def _update_bot_presence(bot: commands.Bot):
+    from db import all_user_servers
+    mods = len(all_user_servers())
+    guilds = len(bot.guilds)
+    ping_ms = round(bot.latency * 1000)
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Activity(
+            type=discord.ActivityType.watching,
+            name=f"{mods} мод. | {guilds} серв. | {ping_ms}мс",
+        ),
+    )
+
+
 class ServersCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.status_loop.start()
+        self.presence_loop.start()
 
     def cog_unload(self):
         self.status_loop.cancel()
+        self.presence_loop.cancel()
 
     @tasks.loop(hours=6)
     async def status_loop(self):
@@ -344,10 +360,19 @@ class ServersCog(commands.Cog):
     async def before_status_loop(self):
         await self.bot.wait_until_ready()
 
+    @tasks.loop(hours=1)
+    async def presence_loop(self):
+        await _update_bot_presence(self.bot)
+
+    @presence_loop.before_loop
+    async def before_presence_loop(self):
+        await self.bot.wait_until_ready()
+
     @commands.Cog.listener()
     async def on_ready(self):
         for guild in self.bot.guilds:
             await post_monitoring_status(guild, self.bot.cfg, self.bot)
+        await _update_bot_presence(self.bot)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):

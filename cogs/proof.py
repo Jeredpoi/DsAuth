@@ -135,6 +135,7 @@ def _make_layout_view(
     fields_text: str,
     evidence_url: str,
     color: int,
+    violator_avatar_url: str = "",
     manage_disabled: bool = False,
     evidence_disabled: bool = False,
 ) -> discord.ui.LayoutView:
@@ -152,17 +153,40 @@ def _make_layout_view(
         disabled=evidence_disabled,
     )
 
-    container_items: list[discord.ui.Item] = [
-        discord.ui.Section(
+    # Header section: title + violator avatar thumbnail (if available)
+    if violator_avatar_url:
+        header_section = discord.ui.Section(
+            discord.ui.TextDisplay(header_text),
+            accessory=discord.ui.Thumbnail(violator_avatar_url),
+        )
+    else:
+        header_section = discord.ui.Section(
             discord.ui.TextDisplay(header_text),
             accessory=manage_btn,
-        ),
-        discord.ui.Separator(),
+        )
+
+    container_items: list[discord.ui.Item] = [header_section, discord.ui.Separator()]
+
+    if violator_avatar_url:
+        # With thumbnail in header: fields get the manage button
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(fields_text),
+                accessory=manage_btn,
+            )
+        )
+    else:
+        # Without thumbnail: fields section has no separate button (manage is in header)
+        container_items.append(discord.ui.TextDisplay(fields_text))
+
+    # Evidence row
+    container_items.append(
         discord.ui.Section(
-            discord.ui.TextDisplay(fields_text),
+            discord.ui.TextDisplay(""),
             accessory=evidence_btn,
-        ),
-    ]
+        )
+    )
+
     if evidence_url:
         container_items.append(
             discord.ui.MediaGallery(discord.MediaGalleryItem(evidence_url))
@@ -571,8 +595,9 @@ async def _post_form(
     color = _punishment_color(punishment)
     h_text = _build_header_text(title, moderator.id)
     f_text = _build_fields_text(violator.id, rule_id, punishment, form_type)
+    avatar_url = str(violator.display_avatar.url) if violator.display_avatar else ""
 
-    layout_view = _make_layout_view(h_text, f_text, evidence_url, color)
+    layout_view = _make_layout_view(h_text, f_text, evidence_url, color, violator_avatar_url=avatar_url)
     _wire_callbacks(layout_view)
 
     await proof_ch.send(view=layout_view)

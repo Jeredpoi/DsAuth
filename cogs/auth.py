@@ -86,11 +86,6 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             )
             return
 
-        review_ch = interaction.guild.get_channel(review_ch_id)
-        if not review_ch:
-            await interaction.response.send_message("❌ Канал не найден.", ephemeral=True)
-            return
-
         member = interaction.user
         embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
         embed.set_author(name=str(member), icon_url=member.display_avatar.url)
@@ -108,7 +103,25 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         ping_text = " ".join(r.mention for r in ping_roles) if ping_roles else None
 
         view = AuthReviewView(member.id)
-        await review_ch.send(content=ping_text, embed=embed, view=view)
+
+        # Post to forum channel (per-server threads) or fallback to text channel
+        forum_ch_id = guild_cfg.get("auth_forum_channel_id", 0)
+        forum_ch = interaction.guild.get_channel(forum_ch_id) if forum_ch_id else None
+        if isinstance(forum_ch, discord.ForumChannel):
+            await _post_auth_to_forum(forum_ch, guild_cfg, member, server_val, embed, view, self.bot.cfg, interaction.guild)
+        elif review_ch_id:
+            review_ch = interaction.guild.get_channel(review_ch_id)
+            if review_ch:
+                await review_ch.send(content=ping_text, embed=embed, view=view)
+            else:
+                await interaction.response.send_message("❌ Канал не найден.", ephemeral=True)
+                return
+        else:
+            await interaction.response.send_message(
+                "❌ Канал рассмотрения заявок не настроен. Обратитесь к администратору.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.send_message(
             "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
@@ -198,6 +211,94 @@ class AuthReviewView(discord.ui.View):
             style=discord.ButtonStyle.danger,
             custom_id=f"auth:reject:{user_id}",
         ))
+
+
+# ─── Forum helpers ────────────────────────────────────────────────────────────
+
+async def _get_or_create_forum_tag(
+    forum: discord.ForumChannel, name: str, emoji: str = ""
+) -> discord.ForumTag:
+    """Find existing tag by name or create it."""
+    for tag in forum.available_tags:
+        if tag.name == name:
+            return tag
+    partial_emoji = discord.PartialEmoji.from_str(emoji) if emoji else None
+    return await forum.create_tag(name=name, emoji=partial_emoji)
+
+
+async def _post_auth_to_forum(
+    forum: discord.ForumChannel,
+    guild_cfg: dict,
+    member: discord.Member,
+    server_val: str,
+    embed: discord.Embed,
+    view: discord.ui.View,
+    cfg: dict,
+    guild: discord.Guild,
+):
+    """Create a forum thread for an auth application, tagged by server number."""
+    from helpers import save_config
+
+    # Ensure base status tags exist
+    pending_tag = await _get_or_create_forum_tag(forum, "⏳ Ожидает", "⏳")
+    approved_tag = await _get_or_create_forum_tag(forum, "✅ Одобрено", "✅")
+    rejected_tag = await _get_or_create_forum_tag(forum, "❌ Отклонено", "❌")
+
+    guild_cfg["auth_forum_tag_pending_id"]  = pending_tag.id
+    guild_cfg["auth_forum_tag_approved_id"] = approved_tag.id
+    guild_cfg["auth_forum_tag_rejected_id"] = rejected_tag.id
+
+    # Per-server tag
+    server_tag = await _get_or_create_forum_tag(forum, f"Сервер {server_val}")
+
+    save_config(cfg)
+
+    ping_roles = [r for r in guild.roles
+                  if r.name in ("Заместитель главного модератора", "Главный модератор")]
+    ping_text = " ".join(r.mention for r in ping_roles) if ping_roles else None
+
+    await forum.create_thread(
+        name=f"Заявка — {member.display_name} — Сервер {server_val}",
+        embed=embed,
+        view=view,
+        applied_tags=[pending_tag, server_tag],
+        content=ping_text,
+        auto_archive_duration=10080,  # 7 дней
+    )
+
+
+async def _close_forum_thread(
+    interaction: discord.Interaction,
+    guild_cfg: dict,
+    approved: bool,
+):
+    """If the interaction happened in a forum thread, update its tags and archive it."""
+    if not isinstance(interaction.channel, discord.Thread):
+        return
+    thread = interaction.channel
+    if not isinstance(thread.parent, discord.ForumChannel):
+        return
+    forum = thread.parent
+
+    tag_id = guild_cfg.get(
+        "auth_forum_tag_approved_id" if approved else "auth_forum_tag_rejected_id", 0
+    )
+    done_tag = forum.get_tag(tag_id) if tag_id else None
+    if not done_tag:
+        done_tag = await _get_or_create_forum_tag(
+            forum, "✅ Одобрено" if approved else "❌ Отклонено"
+        )
+
+    try:
+        new_tags = [done_tag]
+        # Keep the server tag if present
+        for t in thread.applied_tags:
+            if t.name.startswith("Сервер "):
+                new_tags.append(t)
+                break
+        await thread.edit(applied_tags=new_tags, archived=True, locked=False)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
@@ -352,10 +453,12 @@ class AuthCog(commands.Cog):
             except discord.Forbidden:
                 pass
 
+        guild_cfg_approve = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
             interaction, approved=True,
             label=f"✅ Одобрено: {interaction.user} → должность: {rank or '—'}, сервер: {server_num or '?'}"
         )
+        await _close_forum_thread(interaction, guild_cfg_approve, approved=True)
 
         try:
             await member.send(
@@ -385,10 +488,13 @@ class AuthCog(commands.Cog):
 
         db.set_auth_cooldown(user_id)  # 24ч cooldown
 
+        guild_cfg_reject = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
             interaction, approved=False,
             label=f"❌ Отклонено: {interaction.user}"
         )
+        await _close_forum_thread(interaction, guild_cfg_reject, approved=False)
+
         if member:
             try:
                 await member.send(
@@ -515,27 +621,49 @@ class AuthCog(commands.Cog):
                 reason="Канал авторизации",
             )
 
-        review_channel = discord.utils.get(guild.text_channels, name="заявки-на-авторизацию")
+        # Forum channel for auth applications (per-server threads)
+        forum_overwrites = {
+            everyone: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
+        }
+        mgmt_roles = [r for r in guild.roles
+                      if r.name in ("Куратор модерации", "Заместитель главного модератора", "Главный модератор")]
+        for r in mgmt_roles:
+            forum_overwrites[r] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, manage_threads=True
+            )
+
+        forum_ch = discord.utils.get(guild.forums, name="заявки-на-авторизацию", category=category)
+        if not forum_ch:
+            forum_ch = await guild.create_forum(
+                name="заявки-на-авторизацию",
+                category=category,
+                topic="Заявки на авторизацию — рассматриваются ЗГМ/ГМ",
+                overwrites=forum_overwrites,
+                reason="Forum-канал заявок на авторизацию",
+            )
+        guild_cfg["auth_forum_channel_id"] = forum_ch.id
+
+        # Keep a backup text review channel for legacy / fallback
+        review_channel = discord.utils.get(guild.text_channels, name="заявки-на-авторизацию-лог")
         if not review_channel:
             rev_overwrites = {
                 everyone: discord.PermissionOverwrite(view_channel=False),
                 guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
             }
-            for role in guild.roles:
-                if role.permissions.administrator and role != everyone:
-                    rev_overwrites[role] = discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True
-                    )
+            for r in mgmt_roles:
+                rev_overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
             review_channel = await guild.create_text_channel(
-                name="заявки-на-авторизацию",
+                name="заявки-на-авторизацию-лог",
                 category=category,
                 overwrites=rev_overwrites,
-                topic="Заявки на авторизацию — только для модераторов",
-                reason="Канал рассмотрения заявок",
+                topic="Резервный канал заявок",
+                reason="Резервный канал рассмотрения заявок",
             )
 
         guild_cfg["auth_channel_id"] = auth_channel.id
         guild_cfg["auth_review_channel_id"] = review_channel.id
+        guild_cfg["auth_forum_channel_id"] = forum_ch.id
         if team_role:
             guild_cfg["team_role_id"] = team_role.id
         save_config(self.bot.cfg)
@@ -547,7 +675,7 @@ class AuthCog(commands.Cog):
             "🎉 **Система авторизации настроена!**",
             f"• Категория: **🔐 Авторизация**",
             f"• Канал авторизации: {auth_channel.mention}",
-            f"• Канал заявок: {review_channel.mention}",
+            f"• Forum заявок: {forum_ch.mention} (теги по серверам, видят ЗГМ/ГМ/КМ)",
             f"• Роль новых участников: **{UNVERIFIED_ROLE_NAME}**",
             f"• Автокик неавторизованных: через **{AUTOKICK_DAYS} дня**",
             f"• Командная роль: {team_role.mention if team_role else '❌ не задана (задайте через /setup-auth team_role:...)'}",
