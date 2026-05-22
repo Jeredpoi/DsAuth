@@ -10,7 +10,7 @@ from helpers import (
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
-from cogs.servers import get_server_for_member, get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels
+from cogs.servers import get_server_for_member, get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels, is_server_role
 from db import record_form, all_user_servers
 
 REMINDER_HOURS = 2
@@ -419,6 +419,17 @@ def _build_log_embed(
     return embed
 
 
+def _server_for_mod_id(guild: discord.Guild, mod_id: int) -> str | None:
+    """Return the server number for a moderator by member roles, fall back to DB."""
+    member = guild.get_member(mod_id)
+    if member:
+        roles = [r.name for r in member.roles if is_server_role(r.name)]
+        if len(roles) == 1:
+            return roles[0]
+    from db import get_user_server
+    return get_user_server(mod_id)
+
+
 async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: discord.Embed):
     log_ch = get_log_channel(guild, cfg, server)
     if not log_ch:
@@ -491,7 +502,7 @@ async def _log_form_deletion(
     title     = data.get("title", "Наказание")
     user_id   = data.get("user_id", 0)
     punishment = data.get("punishment", "?")
-    server = get_server_for_member(interaction.user, interaction.client.cfg)
+    server = _server_for_mod_id(interaction.guild, data.get("mod_id", 0))
     if not server:
         return
     log_ch = get_log_channel(interaction.guild, interaction.client.cfg, server)
@@ -674,7 +685,7 @@ async def _approve_callback(interaction: discord.Interaction):
         return
     record_form(mod_id, form_type, "approved")
 
-    server = get_server_for_member(interaction.user, interaction.client.cfg)
+    server = _server_for_mod_id(interaction.guild, mod_id)
     if server:
         log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
         await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
@@ -714,7 +725,7 @@ async def _reject_callback(interaction: discord.Interaction):
         return
     record_form(mod_id, form_type, "rejected")
 
-    server = get_server_for_member(interaction.user, interaction.client.cfg)
+    server = _server_for_mod_id(interaction.guild, mod_id)
     if server:
         log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
         await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)

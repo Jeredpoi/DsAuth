@@ -106,16 +106,10 @@ class AdminCog(commands.Cog):
     # ─── /setup ───────────────────────────────────────────────────────────
     @_ADMIN_PERM
     @app_commands.command(name="setup", description="Настройка бота")
-    @app_commands.describe(
-        proof_channel="Канал для форм наказаний (proof)",
-        banform_channel="Канал для форм банов (banform/gbanform)",
-        moderator_nick="Ваш ник для форм",
-    )
+    @app_commands.describe(moderator_nick="Ваш ник для форм")
     async def setup_cmd(
         self,
         interaction: discord.Interaction,
-        proof_channel: discord.TextChannel | None = None,
-        banform_channel: discord.TextChannel | None = None,
         moderator_nick: str | None = None,
     ):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
@@ -123,29 +117,15 @@ class AdminCog(commands.Cog):
             return
 
         cfg = self.bot.cfg
-        guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
-
-        for ch_param, key in ((proof_channel, "proof_channel_id"), (banform_channel, "banform_channel_id")):
-            if ch_param:
-                if ch_param.guild.id != interaction.guild_id:
-                    await interaction.response.send_message(
-                        f"❌ Канал {ch_param.mention} должен принадлежать этому серверу.", ephemeral=True
-                    )
-                    return
-                guild_cfg[key] = ch_param.id
-
         if moderator_nick:
             cfg["moderator_nick"] = moderator_nick
-        save_config(cfg)
+            save_config(cfg)
 
-        proof_ch   = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
-        banform_ch = interaction.guild.get_channel(guild_cfg.get("banform_channel_id", 0))
         lines = [
             "✅ **Настройки сохранены**:",
-            f"• Канал proof: {proof_ch.mention if proof_ch else '❌ не задан'}",
-            f"• Канал banform: {banform_ch.mention if banform_ch else '❌ не задан'}",
             f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`",
             "",
+            "Каналы форм создаются автоматически через `/setupserver <номер>`.",
             "Для шаблонов форм: `/setform` | Для авторизации: `/setup-auth`",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -241,18 +221,27 @@ class AdminCog(commands.Cog):
             "Куратор модерации", "Заместитель главного модератора", "Главный модератор",
         )]
         user_server_db = db.get_user_server(target.id) or "—"
-        proof_ch_id    = guild_cfg.get("proof_channel_id", 0)
-        banform_ch_id  = guild_cfg.get("banform_channel_id", 0)
-        proof_ch       = interaction.guild.get_channel(proof_ch_id)
-        banform_ch     = interaction.guild.get_channel(banform_ch_id)
         servers_cfg    = guild_cfg.get("servers", {})
+        # Show per-server channels for each of the member's server roles
+        channel_lines = []
+        from cogs.servers import get_proof_channel, get_banform_channel, get_log_channel, is_server_role
+        for s in server_roles:
+            proof_ch   = get_proof_channel(interaction.guild, self.bot.cfg, s)
+            banform_ch = get_banform_channel(interaction.guild, self.bot.cfg, s)
+            log_ch     = get_log_channel(interaction.guild, self.bot.cfg, s)
+            channel_lines.append(
+                f"  **[{s}]** proof:{proof_ch.mention if proof_ch else '❌'} "
+                f"banform:{banform_ch.mention if banform_ch else '❌'} "
+                f"log:{log_ch.mention if log_ch else '❌'}"
+            )
+        ch_section = channel_lines if channel_lines else ["  нет серверных ролей"]
         lines = [
             f"**Участник:** {target.mention} (`{target.id}`)",
             f"**Роли сервера (1-90):** {', '.join(server_roles) or 'нет'}",
             f"**Роли должности:** {', '.join(rank_roles) or 'нет'}",
             f"**user_server в БД:** `{user_server_db}`",
-            f"**proof_channel:** {proof_ch.mention if proof_ch else f'не найден (id={proof_ch_id})'}",
-            f"**banform_channel:** {banform_ch.mention if banform_ch else f'не найден (id={banform_ch_id})'}",
+            f"**Каналы по серверам:**",
+            *ch_section,
             f"**Серверные каналы в конфиге:** {', '.join(servers_cfg.keys()) or 'нет'}",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)

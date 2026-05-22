@@ -17,11 +17,13 @@ def is_server_role(name: str) -> bool:
 
 
 def get_server_for_member(member, cfg: dict | None = None) -> str | None:
-    for role in getattr(member, "roles", []):
-        if is_server_role(role.name):
-            return role.name
-    from db import get_user_server
-    return get_user_server(member.id)
+    server_roles = [r.name for r in getattr(member, "roles", []) if is_server_role(r.name)]
+    if len(server_roles) == 1:
+        return server_roles[0]
+    if not server_roles:
+        from db import get_user_server
+        return get_user_server(member.id)
+    return None  # multiple server roles — ambiguous
 
 
 def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:

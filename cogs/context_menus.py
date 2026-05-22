@@ -27,6 +27,12 @@ class ProofContextModal(discord.ui.Modal, title="Выдать наказание
         max_length=500,
         required=False,
     )
+    server_input = discord.ui.TextInput(
+        label="Номер сервера (если у вас несколько серверных ролей)",
+        placeholder="Например: 49 — оставьте пустым для автоопределения",
+        max_length=2,
+        required=False,
+    )
 
     def __init__(self, target: discord.Member):
         super().__init__()
@@ -34,6 +40,7 @@ class ProofContextModal(discord.ui.Modal, title="Выдать наказание
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        server_override = self.server_input.value.strip() or None
         await _post_form(
             interaction,
             moderator=interaction.user,
@@ -42,6 +49,7 @@ class ProofContextModal(discord.ui.Modal, title="Выдать наказание
             punishment=self.punishment_input.value.strip(),
             form_type="proof",
             evidence_url=self.evidence_input.value.strip(),
+            server_override=server_override,
         )
 
 
