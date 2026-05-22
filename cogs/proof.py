@@ -591,7 +591,7 @@ async def _manage_callback(interaction: discord.Interaction):
 
     if not is_author and not is_leader:
         await interaction.response.send_message(
-            "❌ Управление доступно только **автору** этой формы.", ephemeral=True
+            "❌ Управление доступно только **автору** формы или руководству (КМ+).", ephemeral=True
         )
         return
 

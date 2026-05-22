@@ -472,10 +472,16 @@ class AuthCog(commands.Cog):
 
         elif rank_role:
             roles_to_add = [r for r in (rank_role, team_role) if r]
-            if unverified and unverified in member.roles:
-                await member.remove_roles(unverified, reason="Авторизация одобрена")
-            await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
-            db.clear_auth_cooldown(member.id)
+            try:
+                if unverified and unverified in member.roles:
+                    await member.remove_roles(unverified, reason="Авторизация одобрена")
+                if roles_to_add:
+                    await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
+                db.clear_auth_cooldown(member.id)
+            except discord.Forbidden:
+                role_error = f"❌ Нет прав выдать роль **{rank}** (Manage Roles / иерархия ролей)"
+            except Exception as e:
+                role_error = f"❌ Ошибка при выдаче ролей: {e}"
 
         # Автоник: [СМ | 50] Имя  (set whenever rank is known)
         if rank:
@@ -894,7 +900,7 @@ class AuthCog(commands.Cog):
             display_name = re.sub(r'^\[.+?\]\s*', '', member.display_name)
 
         if server_num:
-            abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
+            abbr = RANK_ABBR_SHORT.get(rank, rank[:2].upper())
             prefix = f"[{abbr} | {server_num}] "
             display = display_name[:max(0, 32 - len(prefix))]
             try:

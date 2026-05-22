@@ -600,6 +600,7 @@ class ServersCog(commands.Cog):
             await interaction.followup.send("Нет авторизованных модераторов.", ephemeral=True)
             return
 
+        embeds: list[discord.Embed] = []
         embed = discord.Embed(title="👥 Модераторы по серверам", color=0x2ECC71)
         for server_num in sorted(servers.keys(), key=lambda x: int(x) if x.isdigit() else 0):
             mods_list = servers[server_num]
@@ -609,16 +610,25 @@ class ServersCog(commands.Cog):
             for entry in mods_list:
                 line = entry + "\n"
                 if chunk_len + len(line) > 1024 and chunk:
-                    label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (продолжение)"
+                    label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (прод.)"
+                    if len(embed.fields) >= 25:
+                        embeds.append(embed)
+                        embed = discord.Embed(color=0x2ECC71)
                     embed.add_field(name=label, value="\n".join(chunk), inline=False)
                     chunk, chunk_len, part = [], 0, part + 1
                 chunk.append(entry)
                 chunk_len += len(line)
             if chunk:
-                label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (продолжение)"
+                label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (прод.)"
+                if len(embed.fields) >= 25:
+                    embeds.append(embed)
+                    embed = discord.Embed(color=0x2ECC71)
                 embed.add_field(name=label, value="\n".join(chunk), inline=False)
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        embeds.append(embed)
+        # Discord allows max 10 embeds per message
+        for i in range(0, len(embeds), 10):
+            await interaction.followup.send(embeds=embeds[i:i+10], ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
