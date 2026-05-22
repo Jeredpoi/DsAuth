@@ -153,39 +153,44 @@ def _make_layout_view(
         disabled=evidence_disabled,
     )
 
-    # Header section: title + violator avatar thumbnail (if available)
-    if violator_avatar_url:
-        header_section = discord.ui.Section(
-            discord.ui.TextDisplay(header_text),
-            accessory=discord.ui.Thumbnail(violator_avatar_url),
-        )
-    else:
-        header_section = discord.ui.Section(
-            discord.ui.TextDisplay(header_text),
-            accessory=manage_btn,
-        )
-
-    container_items: list[discord.ui.Item] = [header_section, discord.ui.Separator()]
+    container_items: list = []
 
     if violator_avatar_url:
-        # With thumbnail in header: fields get the manage button
+        # Header with avatar thumbnail, fields with manage button, evidence row at bottom
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(header_text),
+                accessory=discord.ui.Thumbnail(violator_avatar_url),
+            )
+        )
+        container_items.append(discord.ui.Separator())
         container_items.append(
             discord.ui.Section(
                 discord.ui.TextDisplay(fields_text),
                 accessory=manage_btn,
             )
         )
-    else:
-        # Without thumbnail: fields section has no separate button (manage is in header)
-        container_items.append(discord.ui.TextDisplay(fields_text))
-
-    # Evidence row
-    container_items.append(
-        discord.ui.Section(
-            discord.ui.TextDisplay(""),
-            accessory=evidence_btn,
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay("🔗 Прикрепить / просмотреть доказательство"),
+                accessory=evidence_btn,
+            )
         )
-    )
+    else:
+        # Header with manage button, fields with evidence button
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(header_text),
+                accessory=manage_btn,
+            )
+        )
+        container_items.append(discord.ui.Separator())
+        container_items.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(fields_text),
+                accessory=evidence_btn,
+            )
+        )
 
     if evidence_url:
         container_items.append(

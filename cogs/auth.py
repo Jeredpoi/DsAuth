@@ -76,19 +76,34 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         rank_val = self.rank.value.strip()
         rank_expanded = RANK_ABBR.get(rank_val.lower(), rank_val)
 
-        guild_cfg = get_guild_cfg(self.bot.cfg, interaction.guild_id)
-        review_ch_id  = guild_cfg.get("auth_review_channel_id", 0)
-        forum_ch_id   = guild_cfg.get("auth_forum_channel_id", 0)
+        guild = interaction.guild
+        cfg = self.bot.cfg
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        member = interaction.user
 
-        # Need at least one destination configured
-        if not review_ch_id and not forum_ch_id:
+        # Route to the server's own category channel (📋-заявки-авт inside category "N")
+        from cogs.servers import ensure_server_channels, get_auth_applications_channel
+        dest_ch = get_auth_applications_channel(guild, cfg, server_val)
+        if not dest_ch:
+            try:
+                await ensure_server_channels(guild, server_val, cfg)
+                dest_ch = get_auth_applications_channel(guild, cfg, server_val)
+            except discord.Forbidden:
+                pass
+
+        # Fallback: global review channel if configured
+        if not dest_ch:
+            review_ch_id = guild_cfg.get("auth_review_channel_id", 0)
+            if review_ch_id:
+                dest_ch = guild.get_channel(review_ch_id)
+
+        if not dest_ch:
             await interaction.response.send_message(
-                "❌ Канал рассмотрения заявок не настроен. Обратитесь к администратору.",
+                "❌ Канал заявок не найден. Попросите администратора запустить `/deploy`.",
                 ephemeral=True,
             )
             return
 
-        member = interaction.user
         embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
         embed.set_author(name=str(member), icon_url=member.display_avatar.url)
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -100,32 +115,11 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
         embed.set_footer(text="Ожидает решения...")
 
-        ping_roles = [r for r in interaction.guild.roles
-                      if r.name in ("Заместитель главного модератора", "Главный модератор")]
-        ping_text = " ".join(r.mention for r in ping_roles) if ping_roles else None
-
         view = AuthReviewView(member.id)
-
-        # Post to forum channel (per-server threads) or fallback to text channel
-        forum_ch = interaction.guild.get_channel(forum_ch_id) if forum_ch_id else None
-        if isinstance(forum_ch, discord.ForumChannel):
-            await _post_auth_to_forum(forum_ch, guild_cfg, member, server_val, embed, view, self.bot.cfg, interaction.guild)
-        elif review_ch_id:
-            review_ch = interaction.guild.get_channel(review_ch_id)
-            if review_ch:
-                await review_ch.send(content=ping_text, embed=embed, view=view)
-            else:
-                await interaction.response.send_message("❌ Канал не найден.", ephemeral=True)
-                return
-        else:
-            await interaction.response.send_message(
-                "❌ Канал рассмотрения заявок не настроен. Обратитесь к администратору.",
-                ephemeral=True,
-            )
-            return
+        await dest_ch.send(embed=embed, view=view)
 
         await interaction.response.send_message(
-            "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
+            f"✅ Заявка отправлена в канал сервера **{server_val}**! Ожидайте решения.", ephemeral=True
         )
 
         log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
@@ -332,6 +326,12 @@ class AuthCog(commands.Cog):
             if not unverified:
                 continue
             for member in list(unverified.members):
+                if member.id == guild.owner_id:
+                    continue
+                if member.id == getattr(self.bot, "owner_id_cfg", 0):
+                    continue
+                if any(r.name in RANKS for r in member.roles):
+                    continue
                 if not (member.joined_at and member.joined_at < cutoff):
                     continue
                 try:
@@ -559,14 +559,6 @@ class AuthCog(commands.Cog):
         guild_cfg = get_guild_cfg(self.bot.cfg, guild.id)
         guild_cfg["owner_id"] = guild.owner_id
 
-        existing_ch_id = guild_cfg.get("auth_channel_id", 0)
-        if existing_ch_id and guild.get_channel(existing_ch_id):
-            await interaction.followup.send(
-                "⚠️ Система авторизации уже настроена на этом сервере.\n"
-                "Все каналы и роли уже существуют.", ephemeral=True
-            )
-            return
-
         everyone = guild.default_role
 
         unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
@@ -622,38 +614,10 @@ class AuthCog(commands.Cog):
                 reason="Канал авторизации",
             )
 
-        # Forum channel — visible ONLY to Куратор/ЗГМ/ГМ.
-        # Must explicitly deny every other rank role, because the category
-        # has view_channel=True for @everyone which roles can inherit.
-        MGMT_NAMES = {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}
-        forum_overwrites = {
-            everyone: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
-        }
-        for r in guild.roles:
-            if r.name in RANKS:
-                if r.name in MGMT_NAMES:
-                    forum_overwrites[r] = discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, manage_threads=True
-                    )
-                else:
-                    forum_overwrites[r] = discord.PermissionOverwrite(view_channel=False)
-        if unverified:
-            forum_overwrites[unverified] = discord.PermissionOverwrite(view_channel=False)
-
-        forum_ch = discord.utils.get(guild.forums, name="заявки-на-авторизацию", category=category)
-        if not forum_ch:
-            forum_ch = await guild.create_forum(
-                name="заявки-на-авторизацию",
-                category=category,
-                topic="Заявки на авторизацию — рассматриваются ЗГМ/ГМ",
-                overwrites=forum_overwrites,
-                reason="Forum-канал заявок на авторизацию",
-            )
-        guild_cfg["auth_forum_channel_id"] = forum_ch.id
-
-        # Keep a backup text review channel for legacy / fallback
-        review_channel = discord.utils.get(guild.text_channels, name="заявки-на-авторизацию-лог")
+        # Fallback review channel (applications now go to per-server categories via 📋-заявки-авт)
+        mgmt_roles = [r for r in guild.roles
+                      if r.name in {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}]
+        review_channel = discord.utils.get(guild.text_channels, name="заявки-авт-лог")
         if not review_channel:
             rev_overwrites = {
                 everyone: discord.PermissionOverwrite(view_channel=False),
@@ -662,16 +626,15 @@ class AuthCog(commands.Cog):
             for r in mgmt_roles:
                 rev_overwrites[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
             review_channel = await guild.create_text_channel(
-                name="заявки-на-авторизацию-лог",
+                name="заявки-авт-лог",
                 category=category,
                 overwrites=rev_overwrites,
-                topic="Резервный канал заявок",
+                topic="Резервный канал: заявки без привязки к серверу",
                 reason="Резервный канал рассмотрения заявок",
             )
 
         guild_cfg["auth_channel_id"] = auth_channel.id
         guild_cfg["auth_review_channel_id"] = review_channel.id
-        guild_cfg["auth_forum_channel_id"] = forum_ch.id
         if team_role:
             guild_cfg["team_role_id"] = team_role.id
         save_config(self.bot.cfg)
@@ -683,7 +646,7 @@ class AuthCog(commands.Cog):
             "🎉 **Система авторизации настроена!**",
             f"• Категория: **🔐 Авторизация**",
             f"• Канал авторизации: {auth_channel.mention}",
-            f"• Forum заявок: {forum_ch.mention} (теги по серверам, видят ЗГМ/ГМ/КМ)",
+            f"• Заявки: попадают в **📋-заявки-авт** категории сервера (создаётся при `/deploy` или первой заявке)",
             f"• Роль новых участников: **{UNVERIFIED_ROLE_NAME}**",
             f"• Автокик неавторизованных: через **{AUTOKICK_DAYS} дня**",
             f"• Командная роль: {team_role.mention if team_role else '❌ не задана (задайте через /setup-auth team_role:...)'}",

@@ -114,6 +114,18 @@ def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.Tex
     return None
 
 
+def get_auth_applications_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("auth")
+    ch = guild.get_channel(ch_id) if ch_id else None
+    if ch:
+        return ch
+    category = discord.utils.get(guild.categories, name=str(server))
+    if category:
+        return discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
+    return None
+
+
 async def _ensure_common_channels(guild: discord.Guild):
     everyone = guild.default_role
     category = discord.utils.get(guild.categories, name=COMMON_CATEGORY)
@@ -269,6 +281,23 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
             topic=f"Логи наказаний — сервер {server}",
         )
     channel_ids["logs"] = ch.id
+
+    # Auth applications channel — visible to server role members (read) + bot (write)
+    auth_ow = {
+        everyone: discord.PermissionOverwrite(view_channel=False),
+        server_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    }
+    for role in leadership_roles:
+        auth_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    ch = discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
+    if not ch:
+        ch = await guild.create_text_channel(
+            name="📋-заявки-авт", category=category,
+            overwrites=auth_ow,
+            topic=f"Заявки на авторизацию — сервер {server}",
+        )
+    channel_ids["auth"] = ch.id
 
     for i in (1, 2):
         vc_name = f"🔊 {server} | Голосовой {i}"

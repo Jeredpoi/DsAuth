@@ -395,8 +395,11 @@ class AdminCog(commands.Cog):
             if not category:
                 category = await guild.create_category(name="🔐 Авторизация", overwrites=cat_ow)
 
-            # Канал авторизации (кнопка)
-            if not guild_cfg.get("auth_channel_id") or not guild.get_channel(guild_cfg["auth_channel_id"]):
+            # Канал авторизации (кнопка) — создаём если нет, всегда обновляем сообщение
+            from cogs.auth import AuthButtonView
+            existing_auth_ch_id = guild_cfg.get("auth_channel_id", 0)
+            auth_ch = guild.get_channel(existing_auth_ch_id) if existing_auth_ch_id else None
+            if not auth_ch:
                 ch_ow = {
                     everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
                     guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
@@ -408,30 +411,10 @@ class AdminCog(commands.Cog):
                     topic="Нажмите кнопку для подачи заявки",
                     overwrites=ch_ow,
                 )
-                from cogs.auth import AuthButtonView
-                await auth_ch.send(view=AuthButtonView())
                 guild_cfg["auth_channel_id"] = auth_ch.id
-
-            # Forum-канал заявок — явно запрещаем все ранговые роли кроме КМ/ЗГМ/ГМ
-            if not guild_cfg.get("auth_forum_channel_id") or not guild.get_channel(guild_cfg["auth_forum_channel_id"]):
-                MGMT_NAMES = {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}
-                f_ow = {
-                    everyone: discord.PermissionOverwrite(view_channel=False),
-                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
-                }
-                for r in guild.roles:
-                    if r.name in RANKS:
-                        if r.name in MGMT_NAMES:
-                            f_ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True)
-                        else:
-                            f_ow[r] = discord.PermissionOverwrite(view_channel=False)
-                if unverified:
-                    f_ow[unverified] = discord.PermissionOverwrite(view_channel=False)
-                forum_ch = await guild.create_forum(
-                    name="заявки-на-авторизацию", category=category,
-                    topic="Заявки — КМ/ЗГМ/ГМ", overwrites=f_ow,
-                )
-                guild_cfg["auth_forum_channel_id"] = forum_ch.id
+            # Always refresh the V2 welcome message
+            await auth_ch.purge(limit=10, check=lambda m: m.author == guild.me)
+            await auth_ch.send(view=AuthButtonView())
 
             save_config(cfg)
 
