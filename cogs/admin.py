@@ -5,7 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import db
-from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg, RULES
+from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg, RULES, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME
 
 START_TIME = time.time()
 
@@ -256,6 +256,211 @@ class AdminCog(commands.Cog):
             f"**Серверные каналы в конфиге:** {', '.join(servers_cfg.keys()) or 'нет'}",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
+    # ─── /deploy ──────────────────────────────────────────────────────────
+    @_ADMIN_PERM
+    @app_commands.command(
+        name="deploy",
+        description="Создать все недостающие каналы, роли и категории (только владелец)",
+    )
+    async def deploy_cmd(self, interaction: discord.Interaction):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        cfg   = self.bot.cfg
+        done: list[str] = []
+        errors: list[str] = []
+
+        async def step(label: str, coro):
+            try:
+                await coro
+                done.append(f"✅ {label}")
+            except Exception as e:
+                errors.append(f"❌ {label}: {e}")
+
+        # ── 1. Роли авторизации ────────────────────────────────────────────
+        async def _create_roles():
+            unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
+            if not unverified:
+                await guild.create_role(
+                    name=UNVERIFIED_ROLE_NAME, color=discord.Color.light_grey(),
+                    reason="deploy: роль новых участников",
+                )
+            for rank in RANKS:
+                existing = discord.utils.get(guild.roles, name=rank)
+                if not existing:
+                    await guild.create_role(
+                        name=rank, color=discord.Color.blue(), hoist=True,
+                        reason="deploy: роль должности",
+                    )
+                elif not existing.hoist:
+                    try:
+                        await existing.edit(hoist=True)
+                    except discord.Forbidden:
+                        pass
+
+        await step("Роли", _create_roles())
+
+        # ── 2. Информационная категория ────────────────────────────────────
+        async def _setup_info():
+            from cogs.info import _build_rule_embeds, _build_commands_embed, INFO_CATEGORY
+
+            everyone  = guild.default_role
+            read_only = discord.PermissionOverwrite(view_channel=True, send_messages=False)
+            bot_ow    = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
+
+            category = discord.utils.get(guild.categories, name=INFO_CATEGORY)
+            if not category:
+                category = await guild.create_category(
+                    name=INFO_CATEGORY,
+                    overwrites={everyone: read_only, guild.me: bot_ow},
+                )
+
+            guild_cfg = get_guild_cfg(cfg, guild.id)
+            ids = guild_cfg.setdefault("info_channels", {})
+
+            # Правила
+            ch_rules = discord.utils.get(guild.text_channels, name="📌-правила", category=category)
+            if not ch_rules:
+                ch_rules = await guild.create_text_channel(
+                    name="📌-правила", category=category,
+                    topic="Правила команды модерации",
+                    overwrites={everyone: read_only, guild.me: bot_ow},
+                )
+                await ch_rules.purge(limit=10)
+                for embed in _build_rule_embeds():
+                    await ch_rules.send(embed=embed)
+            ids["rules_channel_id"] = ch_rules.id
+
+            # Объявления
+            ch_ann = discord.utils.get(guild.text_channels, name="📢-объявления", category=category)
+            if not ch_ann:
+                ch_ann = await guild.create_text_channel(
+                    name="📢-объявления", category=category,
+                    topic="Объявления руководства",
+                    overwrites={everyone: read_only, guild.me: bot_ow},
+                )
+            ids["announce_channel_id"] = ch_ann.id
+            guild_cfg["info_announce_channel_id"] = ch_ann.id
+
+            # Команды
+            ch_cmd = discord.utils.get(guild.text_channels, name="ℹ️-команды", category=category)
+            if not ch_cmd:
+                ch_cmd = await guild.create_text_channel(
+                    name="ℹ️-команды", category=category,
+                    topic="Список команд бота",
+                    overwrites={everyone: read_only, guild.me: bot_ow},
+                )
+                await ch_cmd.send(embed=_build_commands_embed())
+            ids["commands_channel_id"] = ch_cmd.id
+
+            save_config(cfg)
+
+        await step("Информационная категория", _setup_info())
+
+        # ── 3. Мониторинг ──────────────────────────────────────────────────
+        async def _setup_monitoring():
+            from cogs.servers import _ensure_monitoring_category
+            await _ensure_monitoring_category(guild, cfg)
+
+        await step("Мониторинг", _setup_monitoring())
+
+        # ── 4. Общие каналы ────────────────────────────────────────────────
+        async def _setup_common():
+            from cogs.servers import _ensure_common_channels
+            await _ensure_common_channels(guild)
+
+        await step("Общие каналы", _setup_common())
+
+        # ── 5. Авторизация ─────────────────────────────────────────────────
+        async def _setup_auth():
+            from cogs.auth import _get_or_create_forum_tag, AUTH_COOLDOWN_HOURS, AUTOKICK_DAYS
+
+            everyone  = guild.default_role
+            guild_cfg = get_guild_cfg(cfg, guild.id)
+
+            # Категория
+            cat_ow = {
+                everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
+            if unverified:
+                cat_ow[unverified] = discord.PermissionOverwrite(view_channel=True)
+            category = discord.utils.get(guild.categories, name="🔐 Авторизация")
+            if not category:
+                category = await guild.create_category(name="🔐 Авторизация", overwrites=cat_ow)
+
+            # Канал авторизации (кнопка)
+            if not guild_cfg.get("auth_channel_id") or not guild.get_channel(guild_cfg["auth_channel_id"]):
+                ch_ow = {
+                    everyone: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                }
+                if unverified:
+                    ch_ow[unverified] = discord.PermissionOverwrite(view_channel=True)
+                auth_ch = await guild.create_text_channel(
+                    name="авторизация", category=category,
+                    topic="Нажмите кнопку для подачи заявки",
+                    overwrites=ch_ow,
+                )
+                from cogs.auth import AuthButtonView
+                await auth_ch.send(view=AuthButtonView())
+                guild_cfg["auth_channel_id"] = auth_ch.id
+
+            # Forum-канал заявок
+            if not guild_cfg.get("auth_forum_channel_id") or not guild.get_channel(guild_cfg["auth_forum_channel_id"]):
+                mgmt_roles = [r for r in guild.roles if r.name in ("Куратор модерации", "Заместитель главного модератора", "Главный модератора")]
+                f_ow = {
+                    everyone: discord.PermissionOverwrite(view_channel=False),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True),
+                }
+                for r in mgmt_roles:
+                    f_ow[r] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_threads=True)
+                forum_ch = await guild.create_forum(
+                    name="заявки-на-авторизацию", category=category,
+                    topic="Заявки — ЗГМ/ГМ/Куратор", overwrites=f_ow,
+                )
+                guild_cfg["auth_forum_channel_id"] = forum_ch.id
+
+            save_config(cfg)
+
+        await step("Авторизация", _setup_auth())
+
+        # ── 6. Каналы серверов из БД ───────────────────────────────────────
+        async def _setup_server_channels():
+            from cogs.servers import ensure_server_channels
+            servers_in_db = set(db.all_user_servers().values())
+            guild_cfg = get_guild_cfg(cfg, guild.id)
+            servers_in_cfg = set(guild_cfg.get("servers", {}).keys())
+            all_servers = servers_in_db | servers_in_cfg
+            created = 0
+            for srv in sorted(all_servers, key=lambda x: int(x) if x.isdigit() else 0):
+                try:
+                    await ensure_server_channels(guild, srv, cfg)
+                    created += 1
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            save_config(cfg)
+            return created
+
+        try:
+            n = await _setup_server_channels()
+            done.append(f"✅ Каналы серверов ({n} шт.)")
+        except Exception as e:
+            errors.append(f"❌ Каналы серверов: {e}")
+
+        # ── Итог ───────────────────────────────────────────────────────────
+        lines = ["**🚀 Deploy завершён**", ""]
+        lines += done
+        if errors:
+            lines += ["", "**Ошибки:**"] + errors
+        lines += ["", f"Всего: **{len(done)}** успешно, **{len(errors)}** с ошибкой."]
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
