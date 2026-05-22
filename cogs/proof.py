@@ -185,6 +185,9 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
 
     async def on_submit(self, interaction: discord.Interaction):
         url = self.url_input.value.strip()
+        if not self.proof_message.embeds:
+            await interaction.response.send_message("❌ Форма не найдена.", ephemeral=True)
+            return
         embed = self.proof_message.embeds[0]
         embed.set_image(url=url)
         await self.proof_message.edit(embed=embed)
@@ -287,6 +290,9 @@ class PunishmentView(discord.ui.View):
         custom_id="punishment:manage",
     )
     async def manage(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.message.embeds:
+            await interaction.response.send_message("❌ Форма не найдена.", ephemeral=True)
+            return
         embed = interaction.message.embeds[0]
         form_type = _form_type_from_title(embed.title or "")
 
@@ -314,6 +320,9 @@ class PunishmentView(discord.ui.View):
         emoji="🔗",
     )
     async def evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.message.embeds:
+            await interaction.response.send_message("❌ Форма не найдена.", ephemeral=True)
+            return
         embed = interaction.message.embeds[0]
         if embed.image and embed.image.url:
             await interaction.response.send_message(
@@ -491,6 +500,10 @@ class ProofCog(commands.Cog):
         server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
+
+        if user.id == interaction.user.id:
+            await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
+            return
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         embed = _build_punishment_embed(

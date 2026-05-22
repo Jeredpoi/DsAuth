@@ -472,7 +472,7 @@ class ServersCog(commands.Cog):
             return
 
         embed = discord.Embed(title="👥 Модераторы по серверам", color=0x2ECC71)
-        for server_num in sorted(servers.keys(), key=int):
+        for server_num in sorted(servers.keys(), key=lambda x: int(x) if x.isdigit() else 0):
             mods_list = servers[server_num]
             chunk: list[str] = []
             chunk_len = 0

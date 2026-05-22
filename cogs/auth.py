@@ -527,8 +527,11 @@ class AuthCog(commands.Cog):
         reason="Причина (необязательно)",
     )
     async def dismiss_cmd(self, interaction: discord.Interaction, member: discord.Member, reason: str | None = None):
-        invoker_level = get_member_rank_level(interaction.user)
-        if invoker_level < AUTH_MIN_LEVEL:
+        is_owner = (
+            interaction.user.id == interaction.guild.owner_id
+            or interaction.user.id == getattr(self.bot, "owner_id_cfg", 0)
+        )
+        if not is_owner and get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
             await interaction.response.send_message(
                 "❌ Команда доступна только **Заместителю главного модератора** и **Главному модератору**.",
                 ephemeral=True,
@@ -642,7 +645,7 @@ class AuthCog(commands.Cog):
             display_name = nick_match.group(2)
         else:
             server_num = db.get_user_server(member.id)
-            display_name = member.display_name
+            display_name = re.sub(r'^\[.+?\]\s*', '', member.display_name)
 
         if server_num:
             abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
