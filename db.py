@@ -14,12 +14,12 @@ DB_PATH = "bot_data.db"
 def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
     c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL").fetchone()
     return c
 
 
 def init_db():
     with _conn() as c:
+        c.execute("PRAGMA journal_mode=WAL").fetchone()
         c.executescript("""
         CREATE TABLE IF NOT EXISTS user_servers (
             user_id   TEXT PRIMARY KEY,
@@ -55,17 +55,27 @@ def get_user_server(user_id: int) -> str | None:
         return row["server"] if row else None
 
 
-def set_user_server(user_id: int, server: str, rank: str = ""):
+def set_user_server(user_id: int, server: str, rank: str | None = None):
     with _conn() as c:
-        c.execute(
-            """INSERT INTO user_servers (user_id, server, rank, auth_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE
-               SET server=excluded.server,
-                   rank=excluded.rank,
-                   auth_at=excluded.auth_at""",
-            (str(user_id), server, rank, int(time.time())),
-        )
+        if rank is not None:
+            c.execute(
+                """INSERT INTO user_servers (user_id, server, rank, auth_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE
+                   SET server=excluded.server,
+                       rank=excluded.rank,
+                       auth_at=excluded.auth_at""",
+                (str(user_id), server, rank, int(time.time())),
+            )
+        else:
+            c.execute(
+                """INSERT INTO user_servers (user_id, server, auth_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE
+                   SET server=excluded.server,
+                       auth_at=excluded.auth_at""",
+                (str(user_id), server, int(time.time())),
+            )
 
 
 def remove_user_server(user_id: int):

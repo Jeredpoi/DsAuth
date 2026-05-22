@@ -50,10 +50,7 @@ def _build_commands_embed() -> discord.Embed:
     )
     embed.add_field(
         name="📊 Статистика",
-        value=(
-            "`/stats` — ваша статистика форм\n"
-            "`/history` — история отправленных форм"
-        ),
+        value="`/stats` — ваша статистика форм",
         inline=False,
     )
     embed.add_field(
@@ -186,7 +183,7 @@ class InfoCog(commands.Cog):
         if msg_id:
             try:
                 existing = await ch_rules.fetch_message(msg_id)
-            except (discord.NotFound, discord.HTTPException):
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 existing = None
         if existing:
             await existing.edit(embed=_build_rules_embed())
@@ -219,7 +216,7 @@ class InfoCog(commands.Cog):
         if cmd_msg_id:
             try:
                 existing_cmd = await ch_cmd.fetch_message(cmd_msg_id)
-            except (discord.NotFound, discord.HTTPException):
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 existing_cmd = None
         if existing_cmd:
             await existing_cmd.edit(embed=_build_commands_embed())

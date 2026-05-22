@@ -121,6 +121,8 @@ def fmt_date(dt: datetime) -> str:
 def date_end(punishment: str) -> str:
     now = datetime.now()
     p = punishment.lower()
+    if "устное" in p:
+        return "—"
     if "мут" in p:
         return fmt_date(now + timedelta(minutes=90))
     if "предупрежд" in p:

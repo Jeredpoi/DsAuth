@@ -233,10 +233,16 @@ class DeleteCategoryView(discord.ui.View):
         super().__init__(timeout=30)
         self.server = server
         self.cfg = cfg
+        self.message: discord.Message | None = None
 
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label="Удалить", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -359,11 +365,13 @@ class ServersCog(commands.Cog):
                 )
                 return
             ch_count = len(category.channels)
+            view = DeleteCategoryView(server, self.bot.cfg)
             await interaction.response.send_message(
                 f"⚠️ Удалить категорию **{server}** и все {ch_count} каналов в ней?",
-                view=DeleteCategoryView(server, self.bot.cfg),
+                view=view,
                 ephemeral=True,
             )
+            view.message = await interaction.original_response()
 
         elif action == "monitoring":
             await interaction.response.defer(ephemeral=True)
@@ -414,9 +422,14 @@ class ServersCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
 
+        from db import all_user_servers
+        db_servers = all_user_servers()  # batch fetch once
+
         servers: dict[str, list[str]] = {}
         for member in guild.members:
-            server = get_server_for_member(member)
+            server = next(
+                (r.name for r in member.roles if is_server_role(r.name)), None
+            ) or db_servers.get(str(member.id))
             if server:
                 rank = next(
                     (r.name for r in sorted(member.roles, key=lambda r: RANK_LEVELS.get(r.name, 0), reverse=True)

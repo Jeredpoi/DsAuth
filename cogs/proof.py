@@ -453,11 +453,16 @@ class ProofCog(commands.Cog):
                     age_hours = (now - msg.created_at).total_seconds() / 3600
                     if age_hours >= REMINDER_HOURS:
                         self._reminded.add(msg.id)
-                        await ch.send(
-                            f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!",
-                            reference=msg,
-                            mention_author=False,
-                        )
+                        try:
+                            await ch.send(
+                                f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!",
+                                reference=msg,
+                                mention_author=False,
+                            )
+                        except discord.NotFound:
+                            await ch.send(
+                                f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!"
+                            )
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
