@@ -106,6 +106,29 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             )
             return
 
+        # Send monitoring message first so we can embed its ID in the auth embed footer
+        monitoring_msg_id = 0
+        log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
+        if log_ch:
+            log_embed = discord.Embed(title="📥 Новая заявка на авторизацию", color=0x3498DB,
+                                      timestamp=discord.utils.utcnow())
+            log_embed.set_thumbnail(url=member.display_avatar.url)
+            log_embed.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
+            log_embed.add_field(name="Сервер",   value=server_val,  inline=True)
+            log_embed.add_field(name="Должность", value=rank_expanded, inline=True)
+            log_embed.add_field(name="Аккаунт создан",
+                                value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
+            log_embed.set_footer(text="⏳ Ожидает решения")
+            try:
+                log_msg = await log_ch.send(embed=log_embed)
+                monitoring_msg_id = log_msg.id
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        footer_text = (
+            f"Ожидает решения... | logmsg:{monitoring_msg_id}"
+            if monitoring_msg_id else "Ожидает решения..."
+        )
         embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
         embed.set_author(name=str(member), icon_url=member.display_avatar.url)
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -115,7 +138,7 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.add_field(name="Никнейм", value=self.nickname.value, inline=False)
         embed.add_field(name="Сервер", value=server_val, inline=True)
         embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
-        embed.set_footer(text="Ожидает решения...")
+        embed.set_footer(text=footer_text)
 
         view = AuthReviewView(member.id)
         await dest_ch.send(embed=embed, view=view)
@@ -123,21 +146,6 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         await interaction.followup.send(
             f"✅ Заявка отправлена в канал сервера **{server_val}**! Ожидайте решения.", ephemeral=True
         )
-
-        log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
-        if log_ch:
-            log_embed = discord.Embed(title="📥 Новая заявка на авторизацию", color=0x3498DB,
-                                      timestamp=discord.utils.utcnow())
-            log_embed.set_thumbnail(url=member.display_avatar.url)
-            log_embed.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
-            log_embed.add_field(name="Сервер", value=server_val, inline=True)
-            log_embed.add_field(name="Должность", value=rank_expanded, inline=True)
-            log_embed.add_field(name="Аккаунт создан",
-                                value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
-            try:
-                await log_ch.send(embed=log_embed)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
 
 # ─── Кнопка подачи заявки — Components V2 (персистентная) ────────────────────
@@ -445,14 +453,13 @@ class AuthCog(commands.Cog):
             await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
             db.clear_auth_cooldown(member.id)
 
-        # Автоник: [СМ | 50] Имя
-        if rank and server_num:
-            abbr = RANK_ABBR_SHORT.get(rank, rank[:2])
-            prefix = f"[{abbr} | {server_num}] "
+        # Автоник: [СМ | 50] Имя  (set whenever rank is known)
+        if rank:
+            abbr   = RANK_ABBR_SHORT.get(rank, rank[:2].upper())
+            prefix = f"[{abbr} | {server_num}] " if server_num else f"[{abbr}] "
             display = member.display_name[:max(0, 32 - len(prefix))]
-            new_nick = prefix + display
             try:
-                await member.edit(nick=new_nick, reason="Автоник при авторизации")
+                await member.edit(nick=prefix + display, reason="Автоник при авторизации")
             except discord.Forbidden:
                 pass
 
@@ -477,13 +484,35 @@ class AuthCog(commands.Cog):
             msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
         await interaction.followup.send(msg, ephemeral=True)
 
+        # Edit the existing monitoring message instead of posting a new one
         e = discord.Embed(title="✅ Авторизация одобрена", color=0x2ECC71,
                           timestamp=discord.utils.utcnow())
         e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
         e.add_field(name="Должность", value=rank or "—", inline=True)
         e.add_field(name="Сервер", value=server_num or "—", inline=True)
         e.add_field(name="Одобрил", value=str(interaction.user), inline=False)
-        await self._log_event(interaction.guild, e)
+        e.set_footer(text="✅ Одобрена")
+
+        logmsg_id = 0
+        if interaction.message.embeds:
+            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
+            m_log = re.search(r'logmsg:(\d+)', footer_text)
+            if m_log:
+                logmsg_id = int(m_log.group(1))
+
+        if logmsg_id:
+            log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
+            if log_ch:
+                try:
+                    lmsg = await log_ch.fetch_message(logmsg_id)
+                    await lmsg.edit(embed=e)
+                except Exception:
+                    try:
+                        await log_ch.send(embed=e)
+                    except Exception:
+                        pass
+        else:
+            await self._log_event(interaction.guild, e)
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
         await interaction.response.defer(ephemeral=True)
@@ -515,7 +544,28 @@ class AuthCog(commands.Cog):
                     inline=True)
         e.add_field(name="Отклонил", value=str(interaction.user), inline=True)
         e.add_field(name="Cooldown", value=f"{AUTH_COOLDOWN_HOURS}ч", inline=True)
-        await self._log_event(interaction.guild, e)
+        e.set_footer(text="❌ Отклонена")
+
+        logmsg_id = 0
+        if interaction.message.embeds:
+            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
+            m_log = re.search(r'logmsg:(\d+)', footer_text)
+            if m_log:
+                logmsg_id = int(m_log.group(1))
+
+        if logmsg_id:
+            log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
+            if log_ch:
+                try:
+                    lmsg = await log_ch.fetch_message(logmsg_id)
+                    await lmsg.edit(embed=e)
+                except Exception:
+                    try:
+                        await log_ch.send(embed=e)
+                    except Exception:
+                        pass
+        else:
+            await self._log_event(interaction.guild, e)
 
     async def _disable_review(self, interaction: discord.Interaction, approved: bool, label: str):
         if not interaction.message.embeds:
