@@ -466,13 +466,13 @@ class AuthCog(commands.Cog):
         try:
             await member.send(
                 f"🎉 Ваша заявка на **{guild.name}** одобрена!\n"
-                f"Должность: **{rank}**"
+                f"Должность: **{rank or '—'}**"
                 + (f"\nСервер: **{server_num}**" if server_num else "")
             )
         except discord.Forbidden:
             pass
 
-        msg = f"✅ {member.mention} авторизован как **{rank}**" + (f", сервер **{server_num}**" if server_num else "") + "."
+        msg = f"✅ {member.mention} авторизован как **{rank or '—'}**" + (f", сервер **{server_num}**" if server_num else "") + "."
         if role_error:
             msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
         await interaction.followup.send(msg, ephemeral=True)
