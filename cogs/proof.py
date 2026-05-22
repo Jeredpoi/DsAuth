@@ -549,8 +549,9 @@ class OwnerManageView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
     async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_leader = get_member_rank_level(interaction.user) >= FORM_LEADER_MIN_LEVEL
         age_sec = (discord.utils.utcnow() - self.proof_message.created_at).total_seconds()
-        if age_sec > FORM_DELETE_AUTHOR_WINDOW:
+        if age_sec > FORM_DELETE_AUTHOR_WINDOW and not is_leader:
             await interaction.response.send_message(
                 "❌ Форму можно удалить только в первые **5 минут** после отправки.\n"
                 "Для удаления обратитесь к руководству (КМ+).",
@@ -565,7 +566,7 @@ class OwnerManageView(discord.ui.View):
             await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, log_data, by_leader=False)
+        await _log_form_deletion(interaction, log_data, by_leader=is_leader)
 
 
 # ─── Button callbacks ─────────────────────────────────────────────────────────
@@ -595,12 +596,16 @@ async def _manage_callback(interaction: discord.Interaction):
         )
         return
 
-    if is_leader:
-        panel = LeaderManageView(interaction.message)
-        label = "**⚙️ Управление формой (руководство):**"
-    else:
+    # Authors get OwnerManageView (add evidence + delete); leaders who aren't the
+    # author get LeaderManageView (delete without the 5-min window).
+    # When the author is also a leader, OwnerManageView.delete_form bypasses the
+    # time restriction via the is_leader check below.
+    if is_author:
         panel = OwnerManageView(interaction.message)
         label = "**⚙️ Управление формой:**"
+    else:
+        panel = LeaderManageView(interaction.message)
+        label = "**⚙️ Управление формой (руководство):**"
 
     await interaction.response.send_message(label, view=panel, ephemeral=True)
 
@@ -662,7 +667,11 @@ async def _approve_callback(interaction: discord.Interaction):
         status += f"\n💻 `{command}`"
 
     done_view = _rebuild_view_from_message(interaction.message, 0x2ECC71, done=True, status_line=status)
-    await interaction.message.edit(view=done_view)
+    try:
+        await interaction.message.edit(view=done_view)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
+        return
     record_form(mod_id, form_type, "approved")
 
     server = get_server_for_member(interaction.user, interaction.client.cfg)
@@ -698,7 +707,11 @@ async def _reject_callback(interaction: discord.Interaction):
     status = f"❌ Отклонено: {interaction.user} ({rank_display})"
 
     done_view = _rebuild_view_from_message(interaction.message, 0xE74C3C, done=True, status_line=status)
-    await interaction.message.edit(view=done_view)
+    try:
+        await interaction.message.edit(view=done_view)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
+        return
     record_form(mod_id, form_type, "rejected")
 
     server = get_server_for_member(interaction.user, interaction.client.cfg)
@@ -863,14 +876,18 @@ class ProofCog(commands.Cog):
                             channels_to_check.append(ch)
                             seen_ids.add(srv_ch_id)
 
+        # Prune only the oldest half instead of clearing all — prevents a reminder
+        # storm where every pending form gets re-pinged on the next iteration
         if len(self._reminded) > 10_000:
-            self._reminded.clear()
+            self._reminded = set(list(self._reminded)[5_000:])
 
         cutoff = now - timedelta(days=7)
         for ch in channels_to_check:
             guild_cfg = get_guild_cfg(cfg, ch.guild.id)
             role_id = guild_cfg.get("review_role_id", 0)
-            mention = f"<@&{role_id}>" if role_id else "⚠️"
+            mention = f"<@&{role_id}>" if role_id else ""
+            if not mention:
+                continue  # skip reminder if no role configured — pinging nobody is useless
             try:
                 async for msg in ch.history(limit=100, after=cutoff, oldest_first=True):
                     if msg.id in self._reminded:
@@ -883,7 +900,6 @@ class ProofCog(commands.Cog):
                         continue
                     age_hours = (now - msg.created_at).total_seconds() / 3600
                     if age_hours >= REMINDER_HOURS:
-                        self._reminded.add(msg.id)
                         try:
                             await ch.send(
                                 f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!",
@@ -894,6 +910,10 @@ class ProofCog(commands.Cog):
                             await ch.send(
                                 f"{mention} Форма ожидает одобрения уже **{int(age_hours)}ч**!"
                             )
+                        except (discord.Forbidden, discord.HTTPException):
+                            continue
+                        # Mark as reminded only after successful send
+                        self._reminded.add(msg.id)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
