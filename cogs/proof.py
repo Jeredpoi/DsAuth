@@ -73,15 +73,16 @@ def _punishment_color(punishment: str) -> int:
     return 0x3498DB
 
 
-def _end_timestamp(punishment: str) -> int | None:
+def _end_timestamp(punishment: str) -> tuple[int, str] | None:
+    """Returns (unix_ts, discord_format) or None if no removal time."""
     now = datetime.now()
     p = punishment.lower()
     if "мут" in p:
-        return int((now + timedelta(minutes=90)).timestamp())
+        return (int((now + timedelta(minutes=90)).timestamp()), "R")
     if "15 дней" in p:
-        return int((now + timedelta(days=15)).timestamp())
+        return (int((now + timedelta(days=15)).timestamp()), "f")
     if "7 дней" in p or "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
-        return int((now + timedelta(days=7)).timestamp())
+        return (int((now + timedelta(days=7)).timestamp()), "f")
     return None
 
 
@@ -93,20 +94,20 @@ def _build_punishment_embed(
     form_type: str,
     evidence_url: str = "",
 ) -> discord.Embed:
-    now_ts = int(datetime.now().timestamp())
-    end_ts = _end_timestamp(punishment)
+    now_ts  = int(datetime.now().timestamp())
+    end_info = _end_timestamp(punishment)
 
     embed = discord.Embed(
         title=_punishment_title(punishment),
         color=_punishment_color(punishment),
     )
-    embed.add_field(name="Модератор",         value=moderator.mention,   inline=False)
-    embed.add_field(name="Нарушитель",        value=str(violator.id),    inline=False)
-    embed.add_field(name="Причина наказания", value=rule_id,             inline=False)
-    embed.add_field(name="Наказание",         value=punishment,          inline=False)
-    embed.add_field(name="Время",             value=f"<t:{now_ts}:f>",  inline=False)
-    if end_ts:
-        embed.add_field(name="Снятие", value=f"<t:{end_ts}:f>", inline=False)
+    embed.add_field(name="Модератор",         value=moderator.mention,  inline=False)
+    embed.add_field(name="Нарушитель",        value=str(violator.id),   inline=False)
+    embed.add_field(name="Причина наказания", value=rule_id,            inline=False)
+    embed.add_field(name="Время",             value=f"<t:{now_ts}:f>", inline=False)
+    if end_info:
+        ts, fmt = end_info
+        embed.add_field(name="Снятие", value=f"<t:{ts}:{fmt}>", inline=False)
 
     if form_type in ("banform", "gbanform"):
         min_rank = RANKS[APPROVE_MIN_RANK[form_type] - 1]
