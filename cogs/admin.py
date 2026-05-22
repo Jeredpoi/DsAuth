@@ -378,8 +378,6 @@ class AdminCog(commands.Cog):
 
         # ── 5. Авторизация ─────────────────────────────────────────────────
         async def _setup_auth():
-            from cogs.auth import _get_or_create_forum_tag, AUTH_COOLDOWN_HOURS, AUTOKICK_DAYS
-
             everyone  = guild.default_role
             guild_cfg = get_guild_cfg(cfg, guild.id)
 

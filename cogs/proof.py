@@ -293,7 +293,7 @@ def _extract_evidence_urls(comps) -> list[str]:
     urls = []
     for comp in comps:
         type_val = getattr(getattr(comp, 'type', None), 'value', None)
-        if type_val == 20:  # ComponentType.media_gallery
+        if type_val == 20:  # ComponentType.media_gallery — extract items, don't recurse further
             items = getattr(comp, 'children', []) or getattr(comp, 'items', [])
             for item in items:
                 media = getattr(item, 'media', None)
@@ -301,30 +301,26 @@ def _extract_evidence_urls(comps) -> list[str]:
                     url = getattr(media, 'url', None) or getattr(media, 'proxy_url', None)
                     if url:
                         urls.append(url)
-        if hasattr(comp, 'children') and comp.children:
+        elif hasattr(comp, 'children') and comp.children:
             urls.extend(_extract_evidence_urls(comp.children))
     return urls
 
 
 def _extract_avatar_url(comps) -> str:
-    """Return the first Thumbnail URL from the message."""
+    """Return the Thumbnail URL from a Section's accessory (duck-typing, no type magic)."""
     for comp in comps:
-        type_val = getattr(getattr(comp, 'type', None), 'value', None)
-        if type_val == 22:  # ComponentType.thumbnail
-            media = getattr(comp, 'media', None)
+        # Section accessory is either Button (has custom_id) or Thumbnail (has media, no custom_id)
+        acc = getattr(comp, 'accessory', None)
+        if acc is not None and getattr(acc, 'custom_id', None) is None:
+            media = getattr(acc, 'media', None)
             if media:
-                return getattr(media, 'url', None) or getattr(media, 'proxy_url', None) or ""
+                url = getattr(media, 'url', None) or getattr(media, 'proxy_url', None)
+                if url and url.startswith('http'):
+                    return url
         if hasattr(comp, 'children') and comp.children:
             url = _extract_avatar_url(comp.children)
             if url:
                 return url
-        acc = getattr(comp, 'accessory', None)
-        if acc:
-            type_val_acc = getattr(getattr(acc, 'type', None), 'value', None)
-            if type_val_acc == 22:
-                media = getattr(acc, 'media', None)
-                if media:
-                    return getattr(media, 'url', None) or getattr(media, 'proxy_url', None) or ""
     return ""
 
 
@@ -347,31 +343,42 @@ def _is_pending_v2_message(message: discord.Message) -> bool:
 
 # ─── Rebuild helper ───────────────────────────────────────────────────────────
 
+def _extract_fields_text(all_text: str) -> str:
+    """Extract the fields block (Нарушитель … last field) preserving original timestamps."""
+    m = re.search(r'(\*\*Нарушитель:\*\*.+?)(?=\n-# |\n🔗 |\Z)', all_text, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
 def _rebuild_view_from_message(
     message: discord.Message,
     color: int,
     done: bool = False,
     status_line: str | None = None,
 ) -> discord.ui.LayoutView:
-    """Reconstruct a layout view from an existing V2 message, optionally marking it done."""
-    data = _extract_v2_data(message)
+    """Reconstruct a V2 layout view from an existing message, preserving original timestamps."""
+    data     = _extract_v2_data(message)
+    all_text = _collect_text_from_components(message.components)
+
     title      = data.get("title", "Наказание пользователя")
     mod_id     = data.get("mod_id", 0)
-    user_id    = data.get("user_id", 0)
-    rule_id    = data.get("rule_id", "")
     punishment = data.get("punishment", "")
     form_type  = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
 
     h_text = _build_header_text(title, mod_id)
-    f_text = _build_fields_text(user_id, rule_id, punishment, form_type)
+
+    # Use original fields text (preserves timestamps); fall back to fresh rebuild only if missing
+    f_text = _extract_fields_text(all_text) or _build_fields_text(
+        data.get("user_id", 0), data.get("rule_id", ""), punishment, form_type
+    )
 
     if status_line:
-        f_text = f_text.replace(
-            next((l for l in f_text.split("\n") if "⏳" in l), "___NONE___"),
-            status_line,
-        )
+        pending_line = next((l for l in f_text.split("\n") if "⏳" in l), None)
+        if pending_line:
+            f_text = f_text.replace(pending_line, status_line)
+        else:
+            f_text += f"\n{status_line}"
 
-    avatar_url   = _extract_avatar_url(message.components)
+    avatar_url    = _extract_avatar_url(message.components)
     evidence_urls = _extract_evidence_urls(message.components)
 
     view = _make_layout_view(
@@ -437,25 +444,21 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
             return
 
         existing = _extract_evidence_urls(self.proof_message.components)
-        combined = existing + [u for u in new_urls if u not in existing]
-        combined = combined[:4]  # Discord MediaGallery limit
+        combined = list(dict.fromkeys(existing + new_urls))[:4]  # deduplicate, max 4
 
-        data = _extract_v2_data(self.proof_message)
+        data      = _extract_v2_data(self.proof_message)
+        all_text  = _collect_text_from_components(self.proof_message.components)
+        title     = data.get("title", "Наказание пользователя")
+        mod_id    = data.get("mod_id", 0)
         punishment = data.get("punishment", "")
-        color = _punishment_color(punishment)
+        form_type  = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
 
-        new_view = _rebuild_view_from_message(self.proof_message, color)
-        # Override evidence with the combined list
-        data2 = _extract_v2_data(self.proof_message)
-        title  = data2.get("title", "Наказание пользователя")
-        mod_id = data2.get("mod_id", 0)
-        user_id = data2.get("user_id", 0)
-        rule_id = data2.get("rule_id", "")
-        form_type = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
-
-        h_text = _build_header_text(title, mod_id)
-        f_text = _build_fields_text(user_id, rule_id, punishment, form_type)
+        h_text     = _build_header_text(title, mod_id)
+        f_text     = _extract_fields_text(all_text) or _build_fields_text(
+            data.get("user_id", 0), data.get("rule_id", ""), punishment, form_type
+        )
         avatar_url = _extract_avatar_url(self.proof_message.components)
+        color      = _punishment_color(punishment)
 
         new_view = _make_layout_view(
             h_text, f_text, combined, color,
@@ -465,7 +468,7 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
 
         await self.proof_message.edit(view=new_view)
         await interaction.response.send_message(
-            f"✅ Добавлено {len(new_urls)} доказательств. Всего: {len(combined)}.", ephemeral=True
+            f"✅ Доказательства добавлены ({len(combined)} шт.).", ephemeral=True
         )
 
 
