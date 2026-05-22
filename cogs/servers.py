@@ -1,8 +1,12 @@
+import time
+
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS, RANK_LEVELS
+
+_BOT_START_TIME = time.time()
 
 COMMON_CATEGORY     = "🌐 Общие каналы"
 MONITORING_CATEGORY = "🖥️ Мониторинг"
@@ -60,12 +64,21 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
     ch = get_monitoring_channel(guild, cfg, "📡-статус-бота")
     if not ch:
         return
-    from db import all_user_servers
+    from db import all_user_servers, get_global_form_counts
+    elapsed = int(time.time() - _BOT_START_TIME)
+    h, rem = divmod(elapsed, 3600)
+    m, s = divmod(rem, 60)
+    uptime_str = f"{h}ч {m}м {s}с"
+    total_forms, approved_forms = get_global_form_counts()
+
     embed = discord.Embed(title="📡 Статус бота", color=0x2ECC71,
                           timestamp=discord.utils.utcnow())
-    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)), inline=True)
-    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())), inline=True)
-    embed.add_field(name="📶 Пинг", value=f"{round(bot.latency * 1000)} мс", inline=True)
+    embed.add_field(name="🕐 Аптайм",          value=uptime_str,                       inline=True)
+    embed.add_field(name="📶 Пинг",            value=f"{round(bot.latency * 1000)} мс", inline=True)
+    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)),              inline=True)
+    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())),      inline=True)
+    embed.add_field(name="📋 Форм всего",       value=str(total_forms),                 inline=True)
+    embed.add_field(name="✅ Одобрено форм",    value=str(approved_forms),              inline=True)
     embed.set_footer(text="Обновлено")
     try:
         await ch.send(embed=embed)
@@ -317,6 +330,24 @@ class DeleteCategoryView(discord.ui.View):
 class ServersCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.status_loop.start()
+
+    def cog_unload(self):
+        self.status_loop.cancel()
+
+    @tasks.loop(hours=6)
+    async def status_loop(self):
+        for guild in self.bot.guilds:
+            await post_monitoring_status(guild, self.bot.cfg, self.bot)
+
+    @status_loop.before_loop
+    async def before_status_loop(self):
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        for guild in self.bot.guilds:
+            await post_monitoring_status(guild, self.bot.cfg, self.bot)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):

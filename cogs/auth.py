@@ -114,6 +114,21 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
         )
 
+        log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
+        if log_ch:
+            log_embed = discord.Embed(title="📥 Новая заявка на авторизацию", color=0x3498DB,
+                                      timestamp=discord.utils.utcnow())
+            log_embed.set_thumbnail(url=member.display_avatar.url)
+            log_embed.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
+            log_embed.add_field(name="Сервер", value=server_val, inline=True)
+            log_embed.add_field(name="Должность", value=rank_expanded, inline=True)
+            log_embed.add_field(name="Аккаунт создан",
+                                value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
+            try:
+                await log_ch.send(embed=log_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
 
 # ─── Кнопка подачи заявки (персистентная) ─────────────────────────────────────
 

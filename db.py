@@ -121,6 +121,16 @@ def clear_auth_cooldown(user_id: int):
 
 # ─── form stats ────────────────────────────────────────────────────────────────
 
+def get_global_form_counts() -> tuple[int, int]:
+    """Returns (total, approved) form counts across all moderators."""
+    with _conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM form_stats").fetchone()[0]
+        approved = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE status='approved'"
+        ).fetchone()[0]
+    return total, approved
+
+
 def record_form(mod_id: int, form_type: str, status: str):
     if not mod_id:
         return
