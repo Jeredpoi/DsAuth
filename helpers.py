@@ -70,6 +70,7 @@ DEFAULT_CONFIG: dict = {
 
 DEFAULT_GUILD_CFG: dict = {
     "proof_channel_id": 0,
+    "banform_channel_id": 0,
     "review_role_id": 0,
     "auth_channel_id": 0,
     "auth_review_channel_id": 0,

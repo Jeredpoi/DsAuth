@@ -102,15 +102,15 @@ class AdminCog(commands.Cog):
     # ─── /setup ───────────────────────────────────────────────────────────
     @app_commands.command(name="setup", description="Настройка бота (только для владельца)")
     @app_commands.describe(
-        proof_channel="Канал для доказательств",
-        review_role="Роль проверяющих (получают пинг)",
+        proof_channel="Канал для форм наказаний (proof)",
+        banform_channel="Канал для форм банов (banform/gbanform)",
         moderator_nick="Ваш ник для форм",
     )
     async def setup_cmd(
         self,
         interaction: discord.Interaction,
         proof_channel: discord.TextChannel | None = None,
-        review_role: discord.Role | None = None,
+        banform_channel: discord.TextChannel | None = None,
         moderator_nick: str | None = None,
     ):
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
@@ -120,29 +120,28 @@ class AdminCog(commands.Cog):
         cfg = self.bot.cfg
         guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
 
-        if proof_channel:
-            if proof_channel.guild.id != interaction.guild_id:
-                await interaction.response.send_message(
-                    "❌ Канал доказательств должен принадлежать этому серверу.", ephemeral=True
-                )
-                return
-            guild_cfg["proof_channel_id"] = proof_channel.id
-        if review_role:
-            guild_cfg["review_role_id"] = review_role.id
+        for ch_param, key in ((proof_channel, "proof_channel_id"), (banform_channel, "banform_channel_id")):
+            if ch_param:
+                if ch_param.guild.id != interaction.guild_id:
+                    await interaction.response.send_message(
+                        f"❌ Канал {ch_param.mention} должен принадлежать этому серверу.", ephemeral=True
+                    )
+                    return
+                guild_cfg[key] = ch_param.id
+
         if moderator_nick:
             cfg["moderator_nick"] = moderator_nick
         save_config(cfg)
 
-        ch = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
-        role_id = guild_cfg.get("review_role_id", 0)
+        proof_ch   = interaction.guild.get_channel(guild_cfg.get("proof_channel_id", 0))
+        banform_ch = interaction.guild.get_channel(guild_cfg.get("banform_channel_id", 0))
         lines = [
-            f"✅ **Настройки сохранены** (guild_id: `{interaction.guild_id}`):",
-            f"• Канал доказательств: {ch.mention if ch else '❌ не задан — укажи `proof_channel`'}",
-            f"• Роль проверяющих: {'<@&' + str(role_id) + '>' if role_id else 'не задана'}",
+            f"✅ **Настройки сохранены**:",
+            f"• Канал proof: {proof_ch.mention if proof_ch else '❌ не задан'}",
+            f"• Канал banform: {banform_ch.mention if banform_ch else '❌ не задан'}",
             f"• Ник модератора: `{cfg.get('moderator_nick', 'не задан')}`",
             "",
-            "Для настройки шаблонов форм используйте `/setform`.",
-            "Для настройки системы авторизации используйте `/setup-auth`.",
+            "Для шаблонов форм: `/setform` | Для авторизации: `/setup-auth`",
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

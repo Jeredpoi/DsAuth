@@ -78,11 +78,11 @@ def _end_timestamp(punishment: str) -> int | None:
     p = punishment.lower()
     if "мут" in p:
         return int((now + timedelta(minutes=90)).timestamp())
-    if "предупрежд" in p and "устное" not in p:
-        return int((now + timedelta(days=3)).timestamp())
-    if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
+    if "15 дней" in p:
+        return int((now + timedelta(days=15)).timestamp())
+    if "7 дней" in p or "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
         return int((now + timedelta(days=7)).timestamp())
-    return None  # permanent
+    return None
 
 
 def _build_punishment_embed(
@@ -100,12 +100,13 @@ def _build_punishment_embed(
         title=_punishment_title(punishment),
         color=_punishment_color(punishment),
     )
-    embed.add_field(name="Модератор",         value=moderator.mention,                                 inline=False)
-    embed.add_field(name="Нарушитель",        value=str(violator.id),                                  inline=False)
-    embed.add_field(name="Причина наказания", value=rule_id,                                           inline=False)
-    embed.add_field(name="Наказание",         value=punishment,                                        inline=False)
-    embed.add_field(name="Время",             value=f"<t:{now_ts}:f>",                                 inline=False)
-    embed.add_field(name="Снятие",            value=(f"<t:{end_ts}:R>" if end_ts else "Перманентно"), inline=False)
+    embed.add_field(name="Модератор",         value=moderator.mention,   inline=False)
+    embed.add_field(name="Нарушитель",        value=str(violator.id),    inline=False)
+    embed.add_field(name="Причина наказания", value=rule_id,             inline=False)
+    embed.add_field(name="Наказание",         value=punishment,          inline=False)
+    embed.add_field(name="Время",             value=f"<t:{now_ts}:f>",  inline=False)
+    if end_ts:
+        embed.add_field(name="Снятие", value=f"<t:{end_ts}:f>", inline=False)
 
     if form_type in ("banform", "gbanform"):
         min_rank = RANKS[APPROVE_MIN_RANK[form_type] - 1]
@@ -353,9 +354,10 @@ async def _post_form(
         proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                     else get_proof_channel(guild, cfg, server))
 
-    if not proof_ch and not is_ban:
+    # Global channel fallbacks
+    if not proof_ch:
         for g_cfg in cfg.get("guilds", {}).values():
-            ch_id = g_cfg.get("proof_channel_id", 0)
+            ch_id = g_cfg.get("banform_channel_id" if is_ban else "proof_channel_id", 0)
             if ch_id:
                 proof_ch = interaction.client.get_channel(ch_id)
                 if proof_ch:
@@ -370,8 +372,8 @@ async def _post_form(
             pass
 
     if not proof_ch:
+        ch_label = "банов" if is_ban else "наказаний"
         if server:
-            ch_label = "банов" if is_ban else "наказаний"
             await interaction.followup.send(
                 f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
                 f"Запустите `/manage-category action:create_missing server:{server}`.",
@@ -379,17 +381,13 @@ async def _post_form(
             )
         else:
             await interaction.followup.send(
-                "❌ Не удалось определить ваш сервер. Используйте `/assignserver` или параметр `server` в команде.",
+                "❌ Не удалось определить ваш сервер. Используйте `/assignserver`.",
                 ephemeral=True,
             )
         return
 
-    guild_cfg = get_guild_cfg(cfg, proof_ch.guild.id)
-    review_role_id = guild_cfg.get("review_role_id", 0)
-    mention = f"<@&{review_role_id}>" if review_role_id else None
-
     view = PunishmentView()
-    await proof_ch.send(content=mention, embed=embed, view=view)
+    await proof_ch.send(embed=embed, view=view)
 
     record_form(interaction.user.id, form_type, "sent")
 
@@ -515,22 +513,25 @@ class ProofCog(commands.Cog):
 
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
-        user="Нарушитель", rule="Пункт правил",
-        punishment="Наказание (по умолчанию: Бан 7-15 дней)",
+        user="Нарушитель",
+        rule="Пункт правил",
+        punishment="Срок бана",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
-        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
+    @app_commands.choices(punishment=[
+        app_commands.Choice(name="Бан 7 дней",  value="Бан 7 дней"),
+        app_commands.Choice(name="Бан 15 дней", value="Бан 15 дней"),
+    ])
+    @app_commands.autocomplete(rule=rule_autocomplete)
     async def banform_cmd(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         rule: str,
-        punishment: str = "Бан 7-15 дней",
+        punishment: str = "Бан 7 дней",
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
-        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -544,16 +545,16 @@ class ProofCog(commands.Cog):
             evidence_url=ev_url,
         )
         form_text = build_form(self.bot.cfg, user, rule, punishment, evidence_url=ev_url)
-        await _post_form(interaction, embed, form_text, server_override=server)
+        await _post_form(interaction, embed, form_text)
 
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
-        user="Нарушитель", rule="Пункт правил",
+        user="Нарушитель",
+        rule="Пункт правил",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
-        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete)
     async def gbanform_cmd(
         self,
         interaction: discord.Interaction,
@@ -561,7 +562,6 @@ class ProofCog(commands.Cog):
         rule: str,
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
-        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -575,7 +575,7 @@ class ProofCog(commands.Cog):
             evidence_url=ev_url,
         )
         form_text = build_form(self.bot.cfg, user, rule, "Глобальная блокировка", evidence_url=ev_url)
-        await _post_form(interaction, embed, form_text, server_override=server)
+        await _post_form(interaction, embed, form_text)
 
 
 async def setup(bot: commands.Bot):
