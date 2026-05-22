@@ -621,20 +621,30 @@ class AuthCog(commands.Cog):
                 reason="Системная роль авторизации",
             )
 
+        # manage_messages lets Discord hide moderator-only slash commands from regular members
+        mod_perms = discord.Permissions(manage_messages=True)
+
         created_roles = []
         for rank in RANKS:
             existing = discord.utils.get(guild.roles, name=rank)
             if not existing:
                 await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
+                    permissions=mod_perms,
                     reason="Автосоздание ролей авторизации",
                 )
                 created_roles.append(rank)
-            elif not existing.hoist:
-                try:
-                    await existing.edit(hoist=True, reason="Исправление: роль должна быть hoisted")
-                except discord.Forbidden:
-                    pass
+            else:
+                edits: dict = {}
+                if not existing.hoist:
+                    edits["hoist"] = True
+                if not existing.permissions.manage_messages:
+                    edits["permissions"] = discord.Permissions(existing.permissions.value | mod_perms.value)
+                if edits:
+                    try:
+                        await existing.edit(**edits, reason="Обновление роли авторизации")
+                    except discord.Forbidden:
+                        pass
 
         category = discord.utils.get(guild.categories, name="🔐 Авторизация")
         if not category:
@@ -709,7 +719,7 @@ class AuthCog(commands.Cog):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     # ─── /dismiss ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="dismiss", description="Исключить модератора по собственному желанию")
     @app_commands.describe(
         member="Модератор, покидающий команду",
@@ -789,7 +799,7 @@ class AuthCog(commands.Cog):
 
 
     # ─── /promote ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="promote", description="Изменить звание модератора")
     @app_commands.describe(member="Модератор", rank="Новое звание")
     @app_commands.choices(rank=[app_commands.Choice(name=r, value=r) for r in RANKS])

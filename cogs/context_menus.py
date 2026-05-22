@@ -54,6 +54,7 @@ class ContextMenuCog(commands.Cog):
         self._proof_menu = app_commands.ContextMenu(
             name="📋 Выдать наказание",
             callback=self._proof_context_callback,
+            default_member_permissions=discord.Permissions(manage_messages=True),
         )
         self.bot.tree.add_command(self._proof_menu)
 

@@ -204,12 +204,23 @@ async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
 
 async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -> dict:
     everyone = guild.default_role
+    # manage_messages needed so Discord hides moderator-only slash commands from non-moderators
+    mod_perms = discord.Permissions(manage_messages=True)
     server_role = discord.utils.get(guild.roles, name=server)
     if not server_role:
         server_role = await guild.create_role(
             name=server, color=discord.Color.green(),
-            hoist=True, reason=f"Роль сервера {server}",
+            hoist=True, permissions=mod_perms,
+            reason=f"Роль сервера {server}",
         )
+    elif not server_role.permissions.manage_messages:
+        try:
+            await server_role.edit(
+                permissions=discord.Permissions(server_role.permissions.value | mod_perms.value),
+                reason="Обновление: добавление manage_messages для видимости команд",
+            )
+        except discord.Forbidden:
+            pass
 
     leadership_roles = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
     guild_cfg = get_guild_cfg(cfg, guild.id)
@@ -550,6 +561,7 @@ class ServersCog(commands.Cog):
         else:
             await interaction.followup.send(f"✅ Дублей в категории **{server}** не найдено.", ephemeral=True)
 
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="listmods", description="Список модераторов по серверам")
     async def listmods_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

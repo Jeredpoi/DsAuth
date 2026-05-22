@@ -284,6 +284,9 @@ class AdminCog(commands.Cog):
 
         # ── 1. Роли авторизации ────────────────────────────────────────────
         async def _create_roles():
+            # manage_messages is what makes Discord hide moderator commands from regular members
+            mod_perms = discord.Permissions(manage_messages=True)
+
             unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
             if not unverified:
                 await guild.create_role(
@@ -295,13 +298,20 @@ class AdminCog(commands.Cog):
                 if not existing:
                     await guild.create_role(
                         name=rank, color=discord.Color.blue(), hoist=True,
+                        permissions=mod_perms,
                         reason="deploy: роль должности",
                     )
-                elif not existing.hoist:
-                    try:
-                        await existing.edit(hoist=True)
-                    except discord.Forbidden:
-                        pass
+                else:
+                    edits: dict = {}
+                    if not existing.hoist:
+                        edits["hoist"] = True
+                    if not existing.permissions.manage_messages:
+                        edits["permissions"] = discord.Permissions(existing.permissions.value | mod_perms.value)
+                    if edits:
+                        try:
+                            await existing.edit(**edits, reason="deploy: обновление прав роли")
+                        except discord.Forbidden:
+                            pass
 
         await step("Роли", _create_roles())
 

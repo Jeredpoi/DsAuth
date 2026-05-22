@@ -772,34 +772,27 @@ async def _post_form(
     if server:
         proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                     else get_proof_channel(guild, cfg, server))
-
-    if not proof_ch:
-        for g_cfg in cfg.get("guilds", {}).values():
-            ch_id = g_cfg.get("banform_channel_id" if is_ban else "proof_channel_id", 0)
-            if ch_id:
-                proof_ch = interaction.client.get_channel(ch_id)
-                if proof_ch:
-                    break
-
-    if not proof_ch and server:
-        try:
-            await ensure_server_channels(guild, server, cfg)
-            proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
-                        else get_proof_channel(guild, cfg, server))
-        except discord.Forbidden:
-            pass
+        if not proof_ch:
+            # Auto-create the server's category channels on first use
+            try:
+                await ensure_server_channels(guild, server, cfg)
+                proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
+                            else get_proof_channel(guild, cfg, server))
+            except discord.Forbidden:
+                pass
 
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
         if server:
             await interaction.followup.send(
                 f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
-                f"Запустите `/manage-category action:create_missing server:{server}`.",
+                f"Попросите администратора запустить `/setupserver {server}`.",
                 ephemeral=True,
             )
         else:
             await interaction.followup.send(
-                "❌ Не удалось определить ваш сервер. Используйте `/assignserver`.",
+                "❌ Не удалось определить ваш сервер.\n"
+                "Попросите администратора выполнить `/assignserver`.",
                 ephemeral=True,
             )
         return
@@ -905,6 +898,7 @@ class ProofCog(commands.Cog):
     async def before_reminder(self):
         await self.bot.wait_until_ready()
 
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="proof", description="Отправить доказательство нарушения")
     @app_commands.describe(
         user="Нарушитель",
@@ -935,6 +929,7 @@ class ProofCog(commands.Cog):
         await _post_form(interaction, interaction.user, user, rule, punishment, "proof",
                          evidence_url=ev_url, server_override=server)
 
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
     @app_commands.describe(
         user="Нарушитель",
@@ -967,6 +962,7 @@ class ProofCog(commands.Cog):
         await _post_form(interaction, interaction.user, user, rule, punishment, "banform",
                          evidence_url=ev_url)
 
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
     @app_commands.describe(
         user="Нарушитель",
