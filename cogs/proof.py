@@ -10,7 +10,7 @@ from helpers import (
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
-from cogs.servers import get_server_for_member, get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels, is_server_role
+from cogs.servers import get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels, is_server_role
 from db import record_form, all_user_servers
 
 REMINDER_HOURS = 2

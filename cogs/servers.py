@@ -62,42 +62,69 @@ def get_monitoring_channel(guild: discord.Guild, cfg: dict, name: str) -> discor
     return None
 
 
-async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
-    ch = get_monitoring_channel(guild, cfg, "📡-статус-бота")
-    if not ch:
-        return
+class StatusRefreshView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(
+            label="🔄 Обновить",
+            style=discord.ButtonStyle.secondary,
+            custom_id="status:refresh",
+        )
+        btn.callback = _status_refresh_callback
+        self.add_item(btn)
+
+
+async def _status_refresh_callback(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await post_monitoring_status(interaction.guild, interaction.client.cfg, interaction.client)
+
+
+def _build_status_embed(bot) -> discord.Embed:
     from db import all_user_servers, get_global_form_counts
     elapsed = int(time.time() - _BOT_START_TIME)
     h, rem = divmod(elapsed, 3600)
     m, s = divmod(rem, 60)
-    uptime_str = f"{h}ч {m}м {s}с"
     total_forms, approved_forms = get_global_form_counts()
+    mod_count = len(all_user_servers())
+    ping_ms = round(bot.latency * 1000)
+    status_icon = "🟢" if ping_ms < 200 else "🟡" if ping_ms < 500 else "🔴"
 
-    embed = discord.Embed(title="📡 Статус бота", color=0x2ECC71,
-                          timestamp=discord.utils.utcnow())
-    embed.add_field(name="🕐 Аптайм",          value=uptime_str,                        inline=True)
-    embed.add_field(name="📶 Пинг",            value=f"{round(bot.latency * 1000)} мс",  inline=True)
-    embed.add_field(name="🌐 Серверов Discord", value=str(len(bot.guilds)),               inline=True)
-    embed.add_field(name="👥 Модераторов в БД", value=str(len(all_user_servers())),       inline=True)
-    embed.add_field(name="📋 Форм всего",       value=str(total_forms),                  inline=True)
-    embed.add_field(name="✅ Одобрено форм",    value=str(approved_forms),               inline=True)
+    embed = discord.Embed(
+        title="📡 Статус бота",
+        color=0x2ECC71 if ping_ms < 200 else 0xF1C40F if ping_ms < 500 else 0xE74C3C,
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.add_field(name="🕐 Аптайм",           value=f"{h}ч {m}м {s}с",              inline=True)
+    embed.add_field(name=f"{status_icon} Пинг", value=f"{ping_ms} мс",                inline=True)
+    embed.add_field(name="🌐 Серверов",          value=str(len(bot.guilds)),            inline=True)
+    embed.add_field(name="👥 Модераторов в БД",  value=str(mod_count),                 inline=True)
+    embed.add_field(name="📋 Форм всего",        value=str(total_forms),               inline=True)
+    embed.add_field(name="✅ Одобрено",          value=str(approved_forms),            inline=True)
     embed.set_footer(text="Обновлено")
+    return embed
+
+
+async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
+    ch = get_monitoring_channel(guild, cfg, "📡-статус-бота")
+    if not ch:
+        return
+
+    embed = _build_status_embed(bot)
+    view  = StatusRefreshView()
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
     msg_id = guild_cfg.get("status_message_id", 0)
 
-    # Try to edit existing message
     if msg_id:
         try:
             msg = await ch.fetch_message(msg_id)
-            await msg.edit(embed=embed)
+            await msg.edit(embed=embed, view=view)
             return
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             guild_cfg["status_message_id"] = 0
 
-    # Send new message and save its ID
     try:
-        msg = await ch.send(embed=embed)
+        msg = await ch.send(embed=embed, view=view)
         guild_cfg["status_message_id"] = msg.id
         save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
@@ -634,4 +661,5 @@ class ServersCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    bot.add_view(StatusRefreshView())
     await bot.add_cog(ServersCog(bot))

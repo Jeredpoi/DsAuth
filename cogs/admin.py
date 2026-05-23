@@ -416,9 +416,19 @@ class AdminCog(commands.Cog):
                     overwrites=ch_ow,
                 )
                 guild_cfg["auth_channel_id"] = auth_ch.id
-            # Always refresh the V2 welcome message
-            await auth_ch.purge(limit=10, check=lambda m: m.author == guild.me)
-            await auth_ch.send(view=AuthButtonView())
+            # Edit existing welcome message if possible; only send new if not found
+            auth_msg_id = guild_cfg.get("auth_message_id", 0)
+            auth_msg = None
+            if auth_msg_id:
+                try:
+                    auth_msg = await auth_ch.fetch_message(auth_msg_id)
+                    await auth_msg.edit(view=AuthButtonView())
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    auth_msg = None
+                    guild_cfg["auth_message_id"] = 0
+            if not auth_msg:
+                sent = await auth_ch.send(view=AuthButtonView())
+                guild_cfg["auth_message_id"] = sent.id
 
             save_config(cfg)
 
