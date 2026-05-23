@@ -579,6 +579,60 @@ class ServersCog(commands.Cog):
                 await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
 
     @app_commands.default_permissions(administrator=True)
+    @app_commands.command(name="linkserver", description="Привязать существующие каналы к серверу")
+    @app_commands.describe(
+        server="Номер сервера (1–90)",
+        proof="Канал выдачи наказаний (📋-выдача-наказаний)",
+        banform="Канал форм банов (⚖️-формы-банов)",
+        logs="Канал логов (📊-логи)",
+        auth="Канал заявок авторизации (📋-заявки-авт)",
+    )
+    async def linkserver_cmd(
+        self,
+        interaction: discord.Interaction,
+        server: str,
+        proof: discord.TextChannel | None = None,
+        banform: discord.TextChannel | None = None,
+        logs: discord.TextChannel | None = None,
+        auth: discord.TextChannel | None = None,
+    ):
+        if not self._is_owner(interaction):
+            await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
+            return
+        if not (server.isdigit() and 1 <= int(server) <= 90):
+            await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
+            return
+        if not any([proof, banform, logs, auth]):
+            await interaction.response.send_message(
+                "❌ Укажите хотя бы один канал.", ephemeral=True
+            )
+            return
+
+        cfg = self.bot.cfg
+        guild_cfg = get_guild_cfg(cfg, interaction.guild.id)
+        sc = guild_cfg.setdefault("servers", {}).setdefault(server, {})
+
+        lines = []
+        if proof:
+            sc["proof"] = proof.id
+            lines.append(f"📋 Наказания → {proof.mention}")
+        if banform:
+            sc["banform"] = banform.id
+            lines.append(f"⚖️ Баны → {banform.mention}")
+        if logs:
+            sc["logs"] = logs.id
+            lines.append(f"📊 Логи → {logs.mention}")
+        if auth:
+            sc["auth"] = auth.id
+            lines.append(f"📋 Авт. заявки → {auth.mention}")
+
+        save_config(cfg)
+        await interaction.response.send_message(
+            f"✅ Сервер **{server}** привязан:\n" + "\n".join(lines),
+            ephemeral=True,
+        )
+
+    @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="cleanupserver", description="Удалить дублирующиеся каналы сервера")
     @app_commands.describe(server="Номер сервера (1–90)")
     async def cleanupserver_cmd(self, interaction: discord.Interaction, server: str):
