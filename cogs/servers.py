@@ -27,11 +27,6 @@ def get_server_for_member(member, cfg: dict | None = None) -> str | None:
 
 
 def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("proof")
-    ch = guild.get_channel(ch_id) if ch_id else None
-    if ch:
-        return ch
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
         return discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
@@ -39,11 +34,6 @@ def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.T
 
 
 def get_banform_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("banform")
-    ch = guild.get_channel(ch_id) if ch_id else None
-    if ch:
-        return ch
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
         return discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
@@ -132,11 +122,6 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
 
 
 def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("logs")
-    ch = guild.get_channel(ch_id) if ch_id else None
-    if ch:
-        return ch
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
         return discord.utils.get(guild.text_channels, name="📊-логи", category=category)
@@ -144,11 +129,6 @@ def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.Tex
 
 
 def get_auth_applications_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    guild_cfg = get_guild_cfg(cfg, guild.id)
-    ch_id = guild_cfg.get("servers", {}).get(server, {}).get("auth")
-    ch = guild.get_channel(ch_id) if ch_id else None
-    if ch:
-        return ch
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
         return discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
