@@ -314,7 +314,6 @@ class AdminCog(commands.Cog):
 
         # ── 1. Роли авторизации ────────────────────────────────────────────
         async def _create_roles():
-            # manage_messages is what makes Discord hide moderator commands from regular members
             mod_perms = discord.Permissions(manage_messages=True)
 
             unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
@@ -323,6 +322,14 @@ class AdminCog(commands.Cog):
                     name=UNVERIFIED_ROLE_NAME, color=discord.Color.light_grey(),
                     reason="deploy: роль новых участников",
                 )
+            # Owner-only high ranks (no special permissions, just hoist)
+            from cogs.context_menus import OWNER_ROLES
+            for role_name in OWNER_ROLES:
+                if not discord.utils.get(guild.roles, name=role_name):
+                    await guild.create_role(
+                        name=role_name, color=discord.Color.gold(), hoist=True,
+                        reason="deploy: роль высшего руководства",
+                    )
             for rank in RANKS:
                 existing = discord.utils.get(guild.roles, name=rank)
                 if not existing:

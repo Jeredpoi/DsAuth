@@ -59,63 +59,6 @@ class ProofContextModal(discord.ui.Modal, title="Выдать наказание
         )
 
 
-# ─── Owner role select view ───────────────────────────────────────────────────
-
-class OwnerRoleView(discord.ui.View):
-    def __init__(self, target: discord.Member):
-        super().__init__(timeout=60)
-        self.target = target
-
-        current = {r.name for r in target.roles}
-        options = []
-        for role_name in OWNER_ROLES:
-            has = role_name in current
-            options.append(discord.SelectOption(
-                label=role_name,
-                value=role_name,
-                description="✅ Уже есть — нажмите чтобы снять" if has else "Нажмите чтобы выдать",
-                emoji="✅" if has else "➕",
-            ))
-
-        select = discord.ui.Select(
-            placeholder="Выбрать роль...",
-            options=options,
-        )
-        select.callback = self._on_select
-        self.add_item(select)
-
-    async def _on_select(self, interaction: discord.Interaction):
-        role_name = interaction.data["values"][0]
-        guild = interaction.guild
-
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role:
-            try:
-                role = await guild.create_role(
-                    name=role_name,
-                    color=discord.Color.gold(),
-                    hoist=True,
-                    reason="Создано через контекстное меню владельца",
-                )
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "❌ Нет прав для создания роли.", ephemeral=True
-                )
-                return
-
-        if role in self.target.roles:
-            await self.target.remove_roles(role, reason=f"Снято владельцем: {interaction.user}")
-            action = f"снята с"
-        else:
-            await self.target.add_roles(role, reason=f"Выдано владельцем: {interaction.user}")
-            action = f"выдана"
-
-        await interaction.response.edit_message(
-            content=f"✅ Роль **{role_name}** {action} {self.target.mention}.",
-            view=None,
-        )
-
-
 # ─── Cog ─────────────────────────────────────────────────────────────────────
 
 class ContextMenuCog(commands.Cog):
@@ -126,20 +69,10 @@ class ContextMenuCog(commands.Cog):
             name="📋 Выдать наказание",
             callback=self._proof_context_callback,
         )
-        self._role_menu = app_commands.ContextMenu(
-            name="👑 Роль руководства",
-            callback=self._owner_role_callback,
-        )
         self.bot.tree.add_command(self._proof_menu)
-        self.bot.tree.add_command(self._role_menu)
 
     async def cog_unload(self):
         self.bot.tree.remove_command(self._proof_menu.name, type=self._proof_menu.type)
-        self.bot.tree.remove_command(self._role_menu.name, type=self._role_menu.type)
-
-    def _is_owner(self, interaction: discord.Interaction) -> bool:
-        uid = interaction.user.id
-        return uid == interaction.guild.owner_id or uid == getattr(self.bot, "owner_id_cfg", 0)
 
     async def _proof_context_callback(
         self, interaction: discord.Interaction, member: discord.Member
@@ -155,28 +88,6 @@ class ContextMenuCog(commands.Cog):
             )
             return
         await interaction.response.send_modal(ProofContextModal(member))
-
-    async def _owner_role_callback(
-        self, interaction: discord.Interaction, member: discord.Member
-    ):
-        if not self._is_owner(interaction):
-            await interaction.response.send_message(
-                "❌ Только для владельца.", ephemeral=True
-            )
-            return
-        if member.bot:
-            await interaction.response.send_message(
-                "❌ Нельзя выдать роль боту.", ephemeral=True
-            )
-            return
-
-        current = {r.name for r in member.roles if r.name in OWNER_ROLES}
-        desc = f"Текущие роли: {', '.join(f'**{r}**' for r in current)}" if current else "Нет ни одной роли руководства."
-        await interaction.response.send_message(
-            f"👑 Управление ролями руководства для {member.mention}\n{desc}",
-            view=OwnerRoleView(member),
-            ephemeral=True,
-        )
 
 
 async def setup(bot: commands.Bot):
