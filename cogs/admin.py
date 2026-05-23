@@ -255,37 +255,11 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
-
-        # Fetch Discord-side overrides
-        guild_overrides: dict[int, list[str]] = {}
-        try:
-            all_perms = await interaction.guild.fetch_command_permissions()
-            cmd_map = {c.id: c.name for c in self.bot.tree.get_commands()}
-            for gcp in all_perms:
-                cmd_name = cmd_map.get(gcp.id, str(gcp.id))
-                entries = []
-                for p in gcp.permissions:
-                    if p.type == discord.AppCommandPermissionType.role:
-                        role = interaction.guild.get_role(p.id)
-                        label = role.name if role else f"role:{p.id}"
-                    elif p.type == discord.AppCommandPermissionType.user:
-                        user = interaction.guild.get_member(p.id)
-                        label = f"@{user.display_name}" if user else f"user:{p.id}"
-                    else:
-                        label = f"ch:{p.id}"
-                    entries.append(f"{'✅' if p.permission else '❌'} {label}")
-                if entries:
-                    guild_overrides[cmd_name] = entries
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-        # Group commands by default_member_permissions
         PERM_LABELS = {
-            "administrator":    "🔴 Только администратор",
-            "manage_roles":     "🟠 Управление ролями (руководство)",
-            "manage_messages":  "🟡 Управление сообщениями (модераторы)",
-            None:               "🟢 Все участники",
+            "administrator":   "🔴 Только администратор",
+            "manage_roles":    "🟠 Управление ролями (руководство)",
+            "manage_messages": "🟡 Управление сообщениями (модераторы)",
+            None:              "🟢 Все участники",
         }
         groups: dict[str, list[str]] = {k: [] for k in PERM_LABELS}
 
@@ -301,23 +275,16 @@ class AdminCog(commands.Cog):
                 key = "manage_messages"
             else:
                 key = None
-
-            overrides = guild_overrides.get(cmd.name)
-            override_str = f" → {', '.join(overrides)}" if overrides else ""
-            groups[key].append(f"`/{cmd.name}`{override_str}")
+            groups[key].append(f"`/{cmd.name}`")
 
         embed = discord.Embed(title="🔐 Права команд", color=0x5865F2)
         for perm_key, label in PERM_LABELS.items():
             cmds = groups[perm_key]
             if cmds:
                 embed.add_field(name=label, value="\n".join(cmds), inline=False)
+        embed.set_footer(text="Переопределения — в Настройки сервера → Интеграции")
 
-        if not guild_overrides:
-            embed.set_footer(text="Discord-переопределения: нет или нет доступа")
-        else:
-            embed.set_footer(text="→ показывает переопределения из настроек интеграций Discord")
-
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ─── /deploy ──────────────────────────────────────────────────────────
     @_ADMIN_PERM
