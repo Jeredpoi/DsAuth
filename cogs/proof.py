@@ -893,14 +893,20 @@ async def _post_form(
     )
     _wire_callbacks(layout_view)
 
-    await proof_ch.send(view=layout_view)
+    try:
+        await proof_ch.send(view=layout_view)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        await interaction.followup.send(
+            f"❌ Не удалось отправить форму в {proof_ch.mention}: {e}", ephemeral=True
+        )
+        return
     record_form(interaction.user.id, form_type, "sent")
 
     evidence_for_form = " ".join(ev_urls) if ev_urls else ""
     form_text = build_form(cfg, violator, rule_id, punishment, evidence_url=evidence_for_form)
     try:
         await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         pass
 
     await interaction.followup.send(f"✅ Отправлено в {proof_ch.mention}!", ephemeral=True)
@@ -924,16 +930,17 @@ class ProofCog(commands.Cog):
         seen_ids: set[int] = set()
         channels_to_check: list[discord.TextChannel] = []
 
-        # Only per-server channels — no legacy global proof_channel_id
-        for guild_cfg in cfg.get("guilds", {}).values():
-            for srv_data in guild_cfg.get("servers", {}).values():
-                for key in ("proof", "banform"):
-                    srv_ch_id = srv_data.get(key, 0)
-                    if srv_ch_id and srv_ch_id not in seen_ids:
-                        ch = self.bot.get_channel(srv_ch_id)
-                        if isinstance(ch, discord.TextChannel):
-                            channels_to_check.append(ch)
-                            seen_ids.add(srv_ch_id)
+        # Resolve channels via category lookup (consistent with form routing) —
+        # stale config IDs from old /setup must never be used
+        for guild in self.bot.guilds:
+            for category in guild.categories:
+                if not is_server_role(category.name):
+                    continue
+                for ch_name in ("⚖️-формы-банов",):  # only banform/gbanform need reminders
+                    ch = discord.utils.get(guild.text_channels, name=ch_name, category=category)
+                    if ch and ch.id not in seen_ids:
+                        channels_to_check.append(ch)
+                        seen_ids.add(ch.id)
 
         # FIFO prune — drop oldest entries first (OrderedDict preserves insertion order)
         while len(self._reminded) > 10_000:
