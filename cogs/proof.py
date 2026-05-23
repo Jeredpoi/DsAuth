@@ -31,13 +31,15 @@ async def rule_autocomplete(interaction: discord.Interaction, current: str):
 
 async def server_autocomplete(interaction: discord.Interaction, current: str):
     from cogs.servers import is_server_role
-    member = interaction.user
-    # Only show servers the member actually has a role for
-    member_servers = [r.name for r in getattr(member, "roles", []) if is_server_role(r.name)]
+    # interaction.user is discord.User in autocomplete — need Member for roles
+    member = interaction.guild.get_member(interaction.user.id) if interaction.guild else None
+    if member:
+        member_servers = [r.name for r in member.roles if is_server_role(r.name)]
+    else:
+        member_servers = []
     if not member_servers:
-        # Fall back to DB
         from db import get_user_server
-        db_s = get_user_server(member.id)
+        db_s = get_user_server(interaction.user.id)
         if db_s:
             member_servers = [db_s]
     return [
@@ -424,13 +426,14 @@ def _build_log_embed(
     return embed
 
 
-def _server_for_mod_id(guild: discord.Guild, mod_id: int) -> str | None:
+def _server_for_mod_id(guild: discord.Guild | None, mod_id: int) -> str | None:
     """Return the server number for a moderator by member roles, fall back to DB."""
-    member = guild.get_member(mod_id)
-    if member:
-        roles = [r.name for r in member.roles if is_server_role(r.name)]
-        if len(roles) == 1:
-            return roles[0]
+    if guild:
+        member = guild.get_member(mod_id)
+        if member:
+            roles = [r.name for r in member.roles if is_server_role(r.name)]
+            if len(roles) == 1:
+                return roles[0]
     from db import get_user_server
     return get_user_server(mod_id)
 
@@ -507,6 +510,8 @@ async def _log_form_deletion(
     title     = data.get("title", "Наказание")
     user_id   = data.get("user_id", 0)
     punishment = data.get("punishment", "?")
+    if not interaction.guild:
+        return
     server = _server_for_mod_id(interaction.guild, data.get("mod_id", 0))
     if not server:
         return
@@ -796,7 +801,7 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
     if server_override:
         if not (server_override.isdigit() and 1 <= int(server_override) <= 90):
             return None, f"❌ Некорректный номер сервера: **{server_override}** (должно быть 1–90)."
-        has_role = any(r.name == server_override for r in getattr(member, "roles", []))
+        has_role = any(r.name == server_override and is_server_role(r.name) for r in getattr(member, "roles", []))
         if not has_role:
             return None, (
                 f"❌ У вас нет роли сервера **{server_override}**.\n"
