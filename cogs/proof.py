@@ -829,10 +829,12 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
         )
 
     # No server role — try DB
-    from db import get_user_server
-    db_server = get_user_server(member.id)
-    if db_server:
-        return db_server, None
+    member_id = getattr(member, "id", None)
+    if member_id:
+        from db import get_user_server
+        db_server = get_user_server(member_id)
+        if db_server:
+            return db_server, None
 
     return None, (
         "❌ Не удалось определить ваш сервер.\n"
@@ -853,8 +855,8 @@ async def _post_form(
     guild = interaction.guild
     cfg   = interaction.client.cfg
 
-    # Ensure we have a Member (with .roles), not a bare User
-    actor = guild.get_member(interaction.user.id) if guild else interaction.user
+    # Ensure we have a Member (with .roles); fall back to interaction.user if cache misses
+    actor = (guild.get_member(interaction.user.id) if guild else None) or interaction.user
     server, err = _resolve_server(actor, cfg, server_override)
     if err:
         await interaction.followup.send(err, ephemeral=True)
