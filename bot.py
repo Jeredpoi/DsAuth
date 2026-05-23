@@ -48,5 +48,19 @@ async def on_ready():
     print("   Используйте !sync на сервере для мгновенной синхронизации команд.")
 
 
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    import traceback
+    traceback.print_exc()
+    msg = f"❌ Произошла ошибка: `{error}`"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+
+
 keep_alive()
 asyncio.run(main())
