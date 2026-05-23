@@ -62,7 +62,6 @@ class ContextMenuCog(commands.Cog):
         self._proof_menu = app_commands.ContextMenu(
             name="📋 Выдать наказание",
             callback=self._proof_context_callback,
-            default_member_permissions=discord.Permissions(manage_messages=True),
         )
         self.bot.tree.add_command(self._proof_menu)
 
@@ -72,6 +71,11 @@ class ContextMenuCog(commands.Cog):
     async def _proof_context_callback(
         self, interaction: discord.Interaction, member: discord.Member
     ):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message(
+                "❌ У вас нет прав для этой команды.", ephemeral=True
+            )
+            return
         if member.id == interaction.user.id:
             await interaction.response.send_message(
                 "❌ Нельзя выдать наказание самому себе.", ephemeral=True
