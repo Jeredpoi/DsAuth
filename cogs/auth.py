@@ -141,7 +141,20 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
         embed.set_footer(text=footer_text)
 
         view = AuthReviewView(member.id)
-        await dest_ch.send(embed=embed, view=view)
+        try:
+            await dest_ch.send(embed=embed, view=view)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            # Clean up the monitoring "Новая заявка" so it doesn't dangle without a review
+            if monitoring_msg_id and log_ch:
+                try:
+                    orphan = await log_ch.fetch_message(monitoring_msg_id)
+                    await orphan.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
+            await interaction.followup.send(
+                f"❌ Не удалось отправить заявку в канал сервера **{server_val}**: {e}", ephemeral=True
+            )
+            return
 
         await interaction.followup.send(
             f"✅ Заявка отправлена в канал сервера **{server_val}**! Ожидайте решения.", ephemeral=True
@@ -455,11 +468,11 @@ class AuthCog(commands.Cog):
                     except discord.Forbidden:
                         pass
                 roles_to_add = [r for r in (rank_role, server_role, team_role) if r]
-                # Remove unverified and add new roles atomically — only mutate member if add succeeds
-                if unverified and unverified in member.roles:
-                    await member.remove_roles(unverified, reason="Авторизация одобрена")
+                # Add new roles FIRST — if it fails, unverified stays so user isn't stranded
                 if roles_to_add:
                     await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
+                if unverified and unverified in member.roles:
+                    await member.remove_roles(unverified, reason="Авторизация одобрена")
             except discord.Forbidden:
                 role_error = f"❌ Нет прав выдать роль **{server_num}** (Manage Roles / иерархия ролей)"
             except Exception as e:
@@ -473,10 +486,10 @@ class AuthCog(commands.Cog):
         elif rank_role:
             roles_to_add = [r for r in (rank_role, team_role) if r]
             try:
-                if unverified and unverified in member.roles:
-                    await member.remove_roles(unverified, reason="Авторизация одобрена")
                 if roles_to_add:
                     await member.add_roles(*roles_to_add, reason=f"Авторизован: {interaction.user}")
+                if unverified and unverified in member.roles:
+                    await member.remove_roles(unverified, reason="Авторизация одобрена")
                 db.clear_auth_cooldown(member.id)
             except discord.Forbidden:
                 role_error = f"❌ Нет прав выдать роль **{rank}** (Manage Roles / иерархия ролей)"
@@ -546,6 +559,17 @@ class AuthCog(commands.Cog):
             await self._log_event(interaction.guild, e)
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
+        is_owner = (
+            interaction.user.id == interaction.guild.owner_id
+            or interaction.user.id == getattr(self.bot, "owner_id_cfg", 0)
+        )
+        if not is_owner and get_member_rank_level(interaction.user) < AUTH_MIN_LEVEL:
+            await interaction.response.send_message(
+                f"❌ Отклонять заявки могут только **{RANKS[AUTH_MIN_LEVEL - 1]}+** или владелец.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer(ephemeral=True)
         member = interaction.guild.get_member(user_id)
 
@@ -711,7 +735,8 @@ class AuthCog(commands.Cog):
         # Fallback review channel (applications now go to per-server categories via 📋-заявки-авт)
         mgmt_roles = [r for r in guild.roles
                       if r.name in {"Куратор модерации", "Заместитель главного модератора", "Главный модератор"}]
-        review_channel = discord.utils.get(guild.text_channels, name="заявки-авт-лог")
+        # Scope to auth category — never guild-wide (could pick up unrelated channel)
+        review_channel = discord.utils.get(guild.text_channels, name="заявки-авт-лог", category=category)
         if not review_channel:
             rev_overwrites = {
                 everyone: discord.PermissionOverwrite(view_channel=False),
@@ -731,10 +756,22 @@ class AuthCog(commands.Cog):
         guild_cfg["auth_review_channel_id"] = review_channel.id
         if team_role:
             guild_cfg["team_role_id"] = team_role.id
-        save_config(self.bot.cfg)
 
-        await auth_channel.purge(limit=10, check=lambda m: m.author == guild.me)
-        await auth_channel.send(view=AuthButtonView())
+        # Edit existing welcome message if one is tracked, otherwise post a new one
+        auth_msg_id = guild_cfg.get("auth_message_id", 0)
+        auth_msg = None
+        if auth_msg_id:
+            try:
+                auth_msg = await auth_channel.fetch_message(auth_msg_id)
+                await auth_msg.edit(view=AuthButtonView())
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                auth_msg = None
+                guild_cfg["auth_message_id"] = 0
+        if not auth_msg:
+            sent = await auth_channel.send(view=AuthButtonView())
+            guild_cfg["auth_message_id"] = sent.id
+
+        save_config(self.bot.cfg)
 
         lines = [
             "🎉 **Система авторизации настроена!**",

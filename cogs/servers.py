@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import discord
@@ -7,6 +8,16 @@ from discord.ext import commands, tasks
 from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS, RANK_LEVELS
 
 _BOT_START_TIME = time.time()
+_SERVER_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _get_server_lock(guild_id: int, server: str) -> asyncio.Lock:
+    key = (guild_id, server)
+    lock = _SERVER_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SERVER_LOCKS[key] = lock
+    return lock
 
 COMMON_CATEGORY     = "🌐 Общие каналы"
 MONITORING_CATEGORY = "🖥️ Мониторинг"
@@ -212,6 +223,11 @@ async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
 
 
 async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -> dict:
+    async with _get_server_lock(guild.id, server):
+        return await _ensure_server_channels_locked(guild, server, cfg)
+
+
+async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg: dict) -> dict:
     everyone = guild.default_role
     # manage_messages needed so Discord hides moderator-only slash commands from non-moderators
     mod_perms = discord.Permissions(manage_messages=True)
@@ -573,7 +589,7 @@ class ServersCog(commands.Cog):
                 try:
                     await ch.delete(reason=f"Cleanup: дубль канала {ch.name}")
                     deleted += 1
-                except discord.Forbidden:
+                except (discord.Forbidden, discord.HTTPException):
                     pass
             else:
                 seen_names[ch.name] = ch

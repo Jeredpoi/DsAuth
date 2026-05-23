@@ -1,4 +1,5 @@
 import re
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 import discord
@@ -652,11 +653,13 @@ async def _evidence_callback(interaction: discord.Interaction):
                 "🔗 Доказательства не прикреплены.", ephemeral=True
             )
     except Exception:
+        import traceback
+        traceback.print_exc()
         try:
             await interaction.response.send_message(
                 "❌ Не удалось загрузить доказательства.", ephemeral=True
             )
-        except Exception:
+        except discord.InteractionResponded:
             pass
 
 
@@ -908,7 +911,7 @@ async def _post_form(
 class ProofCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._reminded: set[int] = set()
+        self._reminded: OrderedDict[int, None] = OrderedDict()
         self.reminder_loop.start()
 
     def cog_unload(self):
@@ -932,10 +935,9 @@ class ProofCog(commands.Cog):
                             channels_to_check.append(ch)
                             seen_ids.add(srv_ch_id)
 
-        # Prune only the oldest half instead of clearing all — prevents a reminder
-        # storm where every pending form gets re-pinged on the next iteration
-        if len(self._reminded) > 10_000:
-            self._reminded = set(list(self._reminded)[5_000:])
+        # FIFO prune — drop oldest entries first (OrderedDict preserves insertion order)
+        while len(self._reminded) > 10_000:
+            self._reminded.popitem(last=False)
 
         cutoff = now - timedelta(days=7)
         for ch in channels_to_check:
@@ -945,7 +947,8 @@ class ProofCog(commands.Cog):
             if not mention:
                 continue  # skip reminder if no role configured — pinging nobody is useless
             try:
-                async for msg in ch.history(limit=100, after=cutoff, oldest_first=True):
+                # No limit — scan all messages in the 7-day window, not just the first 100
+                async for msg in ch.history(limit=None, after=cutoff, oldest_first=True):
                     if msg.id in self._reminded:
                         continue
                     if not _is_pending_v2_message(msg):
@@ -969,7 +972,7 @@ class ProofCog(commands.Cog):
                         except (discord.Forbidden, discord.HTTPException):
                             continue
                         # Mark as reminded only after successful send
-                        self._reminded.add(msg.id)
+                        self._reminded[msg.id] = None
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
