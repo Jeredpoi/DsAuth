@@ -30,16 +30,21 @@ async def rule_autocomplete(interaction: discord.Interaction, current: str):
 
 
 async def server_autocomplete(interaction: discord.Interaction, current: str):
-    cfg = interaction.client.cfg
-    guild_cfg = get_guild_cfg(cfg, interaction.guild_id)
-    known = list(guild_cfg.get("servers", {}).keys())
-    known += list(all_user_servers().values())
-    seen, choices = set(), []
-    for s in known:
-        if s not in seen and current in s:
-            choices.append(app_commands.Choice(name=f"Сервер {s}", value=s))
-            seen.add(s)
-    return choices[:25]
+    from cogs.servers import is_server_role
+    member = interaction.user
+    # Only show servers the member actually has a role for
+    member_servers = [r.name for r in getattr(member, "roles", []) if is_server_role(r.name)]
+    if not member_servers:
+        # Fall back to DB
+        from db import get_user_server
+        db_s = get_user_server(member.id)
+        if db_s:
+            member_servers = [db_s]
+    return [
+        app_commands.Choice(name=f"Сервер {s}", value=s)
+        for s in member_servers
+        if current in s
+    ][:25]
 
 
 async def punishment_autocomplete(interaction: discord.Interaction, current: str):
