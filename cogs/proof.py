@@ -791,14 +791,12 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
     if server_override:
         if not (server_override.isdigit() and 1 <= int(server_override) <= 90):
             return None, f"❌ Некорректный номер сервера: **{server_override}** (должно быть 1–90)."
-        # Leadership can post to any server; regular mods must have the matching role
-        if get_member_rank_level(member) < FORM_LEADER_MIN_LEVEL:
-            has_role = any(r.name == server_override for r in getattr(member, "roles", []))
-            if not has_role:
-                return None, (
-                    f"❌ У вас нет роли сервера **{server_override}**.\n"
-                    "Нельзя отправлять формы на чужой сервер."
-                )
+        has_role = any(r.name == server_override for r in getattr(member, "roles", []))
+        if not has_role:
+            return None, (
+                f"❌ У вас нет роли сервера **{server_override}**.\n"
+                "Нельзя отправлять формы на чужой сервер."
+            )
         return server_override, None
 
     from cogs.servers import is_server_role
