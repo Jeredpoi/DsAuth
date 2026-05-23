@@ -37,18 +37,37 @@ def get_server_for_member(member, cfg: dict | None = None) -> str | None:
     return None  # multiple server roles — ambiguous
 
 
-def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
+def _server_cfg(cfg: dict, guild_id: int, server: str) -> dict:
+    return get_guild_cfg(cfg, guild_id).get("servers", {}).get(str(server), {})
+
+
+def _ch_by_id_or_name(
+    guild: discord.Guild,
+    cfg: dict,
+    server: str,
+    id_key: str,
+    ch_name: str,
+) -> discord.TextChannel | None:
+    """Look up a server channel: saved ID first, then category-name fallback."""
+    sc = _server_cfg(cfg, guild.id, server)
+    ch_id = sc.get(id_key, 0)
+    if ch_id:
+        ch = guild.get_channel(ch_id)
+        if isinstance(ch, discord.TextChannel):
+            return ch
+    # fallback: find by category name
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
-        return discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
+        return discord.utils.get(guild.text_channels, name=ch_name, category=category)
     return None
+
+
+def get_proof_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
+    return _ch_by_id_or_name(guild, cfg, server, "proof", "📋-выдача-наказаний")
 
 
 def get_banform_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    category = discord.utils.get(guild.categories, name=str(server))
-    if category:
-        return discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
-    return None
+    return _ch_by_id_or_name(guild, cfg, server, "banform", "⚖️-формы-банов")
 
 
 def get_monitoring_channel(guild: discord.Guild, cfg: dict, name: str) -> discord.TextChannel | None:
@@ -133,17 +152,11 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
 
 
 def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    category = discord.utils.get(guild.categories, name=str(server))
-    if category:
-        return discord.utils.get(guild.text_channels, name="📊-логи", category=category)
-    return None
+    return _ch_by_id_or_name(guild, cfg, server, "logs", "📊-логи")
 
 
 def get_auth_applications_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
-    category = discord.utils.get(guild.categories, name=str(server))
-    if category:
-        return discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
-    return None
+    return _ch_by_id_or_name(guild, cfg, server, "auth", "📋-заявки-авт")
 
 
 async def _ensure_common_channels(guild: discord.Guild):
@@ -262,6 +275,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
 
     # Preserve existing IDs; only overwrite keys we explicitly create/find
     channel_ids = guild_cfg.get("servers", {}).get(server, {}).copy()
+    channel_ids["category_id"] = category.id
 
     ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
     if not ch:
