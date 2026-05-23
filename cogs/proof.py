@@ -801,6 +801,9 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
          - Multiple     → return error asking to specify
       3. DB fallback (set_user_server) — only if no role at all
     """
+    member_roles = [r.name for r in getattr(member, "roles", [])]
+    print(f"[_resolve_server] member={getattr(member,'id',member)} override={server_override!r} roles={member_roles}", flush=True)
+
     if server_override:
         if not (server_override.isdigit() and 1 <= int(server_override) <= 90):
             return None, f"❌ Некорректный номер сервера: **{server_override}** (должно быть 1–90)."
@@ -850,7 +853,9 @@ async def _post_form(
     guild = interaction.guild
     cfg   = interaction.client.cfg
 
-    server, err = _resolve_server(interaction.user, cfg, server_override)
+    # Ensure we have a Member (with .roles), not a bare User
+    actor = guild.get_member(interaction.user.id) if guild else interaction.user
+    server, err = _resolve_server(actor, cfg, server_override)
     if err:
         await interaction.followup.send(err, ephemeral=True)
         return
@@ -909,7 +914,9 @@ async def _post_form(
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-    await interaction.followup.send(f"✅ Отправлено в {proof_ch.mention}!", ephemeral=True)
+    await interaction.followup.send(
+        f"✅ Отправлено в {proof_ch.mention} (сервер **{server}**)!", ephemeral=True
+    )
 
 
 # ─── Cog ──────────────────────────────────────────────────────────────────────
