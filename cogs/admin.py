@@ -251,8 +251,10 @@ class AdminCog(commands.Cog):
     @_ADMIN_PERM
     @app_commands.command(name="cmdperms", description="Показать права доступа ко всем командам")
     async def cmdperms_cmd(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
         if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
-            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            await interaction.followup.send("❌ Только для владельца.", ephemeral=True)
             return
 
         PERM_LABELS = {
@@ -284,7 +286,7 @@ class AdminCog(commands.Cog):
                 embed.add_field(name=label, value="\n".join(cmds), inline=False)
         embed.set_footer(text="Переопределения — в Настройки сервера → Интеграции")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ─── /deploy ──────────────────────────────────────────────────────────
     @_ADMIN_PERM
