@@ -41,6 +41,19 @@ def _server_cfg(cfg: dict, guild_id: int, server: str) -> dict:
     return get_guild_cfg(cfg, guild_id).get("servers", {}).get(str(server), {})
 
 
+def server_for_channel(guild: discord.Guild, cfg: dict, channel_id: int) -> str | None:
+    """Return the server number that owns this channel, or None if not found."""
+    servers = get_guild_cfg(cfg, guild.id).get("servers", {})
+    for server, sc in servers.items():
+        if channel_id in (sc.get("proof"), sc.get("banform"), sc.get("logs"), sc.get("auth")):
+            return server
+    # fallback: check channel's category name
+    ch = guild.get_channel(channel_id)
+    if ch and ch.category and is_server_role(ch.category.name):
+        return ch.category.name
+    return None
+
+
 def _ch_by_id_or_name(
     guild: discord.Guild,
     cfg: dict,
@@ -484,13 +497,23 @@ class ServersCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        new_role_names = {r.name for r in after.roles} - {r.name for r in before.roles}
-        for name in new_role_names:
-            if is_server_role(name):
-                try:
-                    await ensure_server_channels(after.guild, name, self.bot.cfg)
-                except discord.Forbidden:
-                    pass
+        before_servers = {r.name for r in before.roles if is_server_role(r.name)}
+        after_servers  = {r.name for r in after.roles  if is_server_role(r.name)}
+
+        # Auto-create channels for newly assigned server role
+        for name in after_servers - before_servers:
+            try:
+                await ensure_server_channels(after.guild, name, self.bot.cfg)
+            except discord.Forbidden:
+                pass
+
+        # Keep DB in sync: update when server roles changed
+        if after_servers != before_servers:
+            from db import set_user_server, remove_user_server
+            if len(after_servers) == 1:
+                set_user_server(after.id, next(iter(after_servers)))
+            elif not after_servers:
+                remove_user_server(after.id)
 
     def _is_owner(self, interaction: discord.Interaction) -> bool:
         uid = interaction.user.id

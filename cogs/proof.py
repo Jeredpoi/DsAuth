@@ -11,7 +11,7 @@ from helpers import (
     get_guild_cfg, get_member_rank_level, build_command,
     APPROVE_MIN_RANK, RANKS,
 )
-from cogs.servers import get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels, is_server_role
+from cogs.servers import get_proof_channel, get_banform_channel, get_log_channel, ensure_server_channels, is_server_role, server_for_channel
 from db import record_form, all_user_servers
 
 REMINDER_HOURS = 2
@@ -698,7 +698,8 @@ async def _approve_callback(interaction: discord.Interaction):
         return
     record_form(mod_id, form_type, "approved")
 
-    server = _server_for_mod_id(interaction.guild, mod_id)
+    # Route log by the channel the form is in, not by moderator's current roles
+    server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if server:
         log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
         await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
@@ -738,7 +739,7 @@ async def _reject_callback(interaction: discord.Interaction):
         return
     record_form(mod_id, form_type, "rejected")
 
-    server = _server_for_mod_id(interaction.guild, mod_id)
+    server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if server:
         log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
         await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
