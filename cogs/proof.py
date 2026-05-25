@@ -513,7 +513,7 @@ async def _log_form_deletion(
     punishment = data.get("punishment", "?")
     if not interaction.guild:
         return
-    server = _server_for_mod_id(interaction.guild, data.get("mod_id", 0))
+    server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if not server:
         return
     log_ch = get_log_channel(interaction.guild, interaction.client.cfg, server)
