@@ -1093,6 +1093,69 @@ class ProofCog(commands.Cog):
                          evidence_url=ev_url, server_override=server)
 
 
+    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.command(name="activforms", description="Список незакрытых форм банов")
+    @app_commands.describe(server="Номер сервера (оставьте пустым — автоопределение)")
+    @app_commands.autocomplete(server=server_autocomplete)
+    async def activforms_cmd(self, interaction: discord.Interaction, server: str | None = None):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+        cfg   = interaction.client.cfg
+
+        # Determine which servers to scan
+        if server:
+            servers_to_scan = [server]
+        else:
+            actor = (guild.get_member(interaction.user.id) if guild else None) or interaction.user
+            server_roles = [r.name for r in getattr(actor, "roles", []) if is_server_role(r.name)]
+            if server_roles:
+                servers_to_scan = server_roles
+            else:
+                from db import get_user_server
+                db_s = get_user_server(interaction.user.id)
+                servers_to_scan = [db_s] if db_s else []
+
+        if not servers_to_scan:
+            await interaction.followup.send("❌ Не удалось определить сервер.", ephemeral=True)
+            return
+
+        cutoff = discord.utils.utcnow() - __import__("datetime").timedelta(days=30)
+        results: list[tuple[str, discord.Message]] = []  # (server, message)
+
+        for srv in servers_to_scan:
+            banform_ch = get_banform_channel(guild, cfg, srv)
+            if not banform_ch:
+                continue
+            try:
+                async for msg in banform_ch.history(limit=None, after=cutoff, oldest_first=True):
+                    if _is_pending_v2_message(msg):
+                        results.append((srv, msg))
+            except (discord.Forbidden, discord.HTTPException):
+                continue
+
+        if not results:
+            await interaction.followup.send("✅ Незакрытых форм нет.", ephemeral=True)
+            return
+
+        lines = [f"**⏳ Незакрытые формы банов: {len(results)}**\n"]
+        for srv, msg in results:
+            data = _extract_v2_data(msg)
+            mod_id    = data.get("mod_id", 0)
+            user_id   = data.get("user_id", 0)
+            punishment = data.get("punishment", "?")
+            age_h = int((discord.utils.utcnow() - msg.created_at).total_seconds() / 3600)
+            lines.append(
+                f"• Сервер **{srv}** | <@{mod_id}> → <@{user_id}> | {punishment} | "
+                f"ожидает **{age_h}ч** | [перейти]({msg.jump_url})"
+            )
+            if len(lines) >= 26:  # Discord embed limit
+                lines.append("…и ещё есть.")
+                break
+
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(ProofCog(bot))
     bot.add_view(PunishmentLayoutView())
