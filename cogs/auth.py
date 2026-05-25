@@ -387,12 +387,18 @@ class AuthCog(commands.Cog):
         custom_id: str = interaction.data.get("custom_id", "")
 
         if custom_id.startswith("auth:approve:"):
-            user_id = int(custom_id.split(":")[2])
+            parts = custom_id.split(":")
+            if len(parts) < 3 or not parts[2].isdigit():
+                return
+            user_id = int(parts[2])
             rank = (interaction.data.get("values") or [None])[0]
             await self._handle_approve(interaction, user_id, rank)
 
         elif custom_id.startswith("auth:reject:"):
-            user_id = int(custom_id.split(":")[2])
+            parts = custom_id.split(":")
+            if len(parts) < 3 or not parts[2].isdigit():
+                return
+            user_id = int(parts[2])
             await self._handle_reject(interaction, user_id)
 
     async def _handle_approve(self, interaction: discord.Interaction, user_id: int, rank: str | None):

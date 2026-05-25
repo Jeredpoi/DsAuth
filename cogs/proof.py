@@ -138,7 +138,7 @@ def _build_fields_text(
         ts, fmt = end_info
         lines.append(f"**Снятие:** <t:{ts}:{fmt}>")
     if form_type in ("banform", "gbanform"):
-        min_rank = RANKS[APPROVE_MIN_RANK[form_type] - 1]
+        min_rank = RANKS[APPROVE_MIN_RANK.get(form_type, 2) - 1]
         lines.append(f"⏳ Ожидает одобрения: {min_rank}+")
 
     return "\n".join(lines)
