@@ -874,13 +874,17 @@ async def _post_form(
     proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                 else get_proof_channel(guild, cfg, server))
 
+    ensure_error: str | None = None
     if not proof_ch:
         # Auto-create channels for this server on first use
         try:
             await ensure_server_channels(guild, server, cfg)
             proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                         else get_proof_channel(guild, cfg, server))
-        except Exception:
+        except discord.Forbidden:
+            ensure_error = "нет прав на создание каналов (Forbidden)"
+        except Exception as e:
+            ensure_error = str(e)[:120]
             import traceback; traceback.print_exc()
 
     if not proof_ch:
@@ -889,12 +893,14 @@ async def _post_form(
         raw_ch = guild.get_channel(raw_id) if raw_id else None
         cat = discord.utils.get(guild.categories, name=str(server))
         cat_channels = [c.name for c in cat.channels] if cat else []
+        actor_has_roles = bool(getattr(actor, "roles", None))
         diag = (
-            f"`actor={actor_type}` "
+            f"`actor={'Member' if actor_has_roles else 'User(no roles)'}` "
             f"`DB before={raw_id_before}` `DB after={raw_id}` "
             f"`guild.get_channel={'ok' if raw_ch else 'None'}` "
             f"`cat={'найдена' if cat else 'НЕ найдена'}` "
             f"`ch_in_cat={cat_channels}`"
+            + (f" `ensure_error={ensure_error}`" if ensure_error else "")
         )
         await interaction.followup.send(
             f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
