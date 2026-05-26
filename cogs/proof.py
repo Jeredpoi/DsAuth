@@ -914,7 +914,7 @@ async def _post_form(
                 f"`send_messages={'✓' if p.send_messages else '✗'}`"
             )
         diag_lines = [
-            f"`сервер={server}` `src={server_src}` `форма={form_type}`",
+            f"`сервер={server}` `src={server_src}` `форма={form_type}` `mfa_level={guild.mfa_level}`",
             f"`actor={'Member' if getattr(actor, 'roles', None) else 'User'}` "
             f"`roles={actor_roles[:5]}`",
             f"`DB[{db_key}] before={raw_id_before} after={raw_id}` "

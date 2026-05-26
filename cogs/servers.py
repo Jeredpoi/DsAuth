@@ -275,6 +275,13 @@ async def ensure_server_channels(guild: discord.Guild, server: str, cfg: dict) -
 
 
 async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg: dict) -> dict:
+    # If bot's member not in cache — force-fetch it so guild.me is not None
+    if guild.me is None:
+        try:
+            await guild.chunk()
+        except Exception:
+            pass
+
     everyone = guild.default_role
     # manage_messages needed so Discord hides moderator-only slash commands from non-moderators
     mod_perms = discord.Permissions(manage_messages=True)
