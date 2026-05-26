@@ -297,16 +297,30 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     leadership_roles = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
     guild_cfg = get_guild_cfg(cfg, guild.id)
 
+    def _safe_ow(mapping: dict) -> dict:
+        """Remove None keys from overwrites dict (guild.me can be None if cache miss)."""
+        return {k: v for k, v in mapping.items() if k is not None}
+
+    async def _create_ch(name: str, cat: discord.CategoryChannel, overwrites: dict, **kw) -> discord.TextChannel:
+        """Create text channel with overwrites; fall back to no overwrites on Forbidden."""
+        ow = _safe_ow(overwrites)
+        try:
+            return await guild.create_text_channel(name=name, category=cat, overwrites=ow, **kw)
+        except discord.Forbidden:
+            return await guild.create_text_channel(name=name, category=cat, **kw)
+
     cat_name = str(server)
     category = discord.utils.get(guild.categories, name=cat_name)
     if not category:
-        cat_ow = {
+        cat_ow = _safe_ow({
             everyone: discord.PermissionOverwrite(view_channel=False),
             server_role: discord.PermissionOverwrite(view_channel=True),
-        }
-        if guild.me:
-            cat_ow[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        category = await guild.create_category(name=cat_name, overwrites=cat_ow)
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        })
+        try:
+            category = await guild.create_category(name=cat_name, overwrites=cat_ow)
+        except discord.Forbidden:
+            category = await guild.create_category(name=cat_name)
 
     from db import get_server_channel, set_server_channel
     set_server_channel(guild.id, server, "category_id", category.id)
@@ -330,28 +344,22 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     if not _has_linked("chat"):
         ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="💬-общение", category=category,
-                topic=f"Общение модераторов сервера {server}",
-            )
+            ch = await _create_ch("💬-общение", category, {},
+                                  topic=f"Общение модераторов сервера {server}")
         _save("chat", ch)
 
     if not _has_linked("proof"):
         ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="📋-выдача-наказаний", category=category,
-                topic=f"Формы наказаний — сервер {server}",
-            )
+            ch = await _create_ch("📋-выдача-наказаний", category, {},
+                                  topic=f"Формы наказаний — сервер {server}")
         _save("proof", ch)
 
     if not _has_linked("banform"):
         ch = discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="⚖️-формы-банов", category=category,
-                topic=f"Формы банов и глобальных банов — сервер {server}",
-            )
+            ch = await _create_ch("⚖️-формы-банов", category, {},
+                                  topic=f"Формы банов и глобальных банов — сервер {server}")
         _save("banform", ch)
 
     lead_ow = {
@@ -365,11 +373,8 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     if not _has_linked("leadership"):
         ch = discord.utils.get(guild.text_channels, name="👑-руководство", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="👑-руководство", category=category,
-                overwrites=lead_ow,
-                topic=f"Руководство сервера {server}",
-            )
+            ch = await _create_ch("👑-руководство", category, lead_ow,
+                                  topic=f"Руководство сервера {server}")
         _save("leadership", ch)
 
     log_ow = {
@@ -383,14 +388,11 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     if not _has_linked("logs"):
         ch = discord.utils.get(guild.text_channels, name="📊-логи", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="📊-логи", category=category,
-                overwrites=log_ow,
-                topic=f"Логи наказаний — сервер {server}",
-            )
+            ch = await _create_ch("📊-логи", category, log_ow,
+                                  topic=f"Логи наказаний — сервер {server}")
         else:
             try:
-                await ch.edit(overwrites=log_ow)
+                await ch.edit(overwrites=_safe_ow(log_ow))
             except discord.Forbidden:
                 pass
         _save("logs", ch)
@@ -406,14 +408,11 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     if not _has_linked("auth"):
         ch = discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
         if not ch:
-            ch = await guild.create_text_channel(
-                name="📋-заявки-авт", category=category,
-                overwrites=auth_ow,
-                topic=f"Заявки на авторизацию — сервер {server}",
-            )
+            ch = await _create_ch("📋-заявки-авт", category, auth_ow,
+                                  topic=f"Заявки на авторизацию — сервер {server}")
         else:
             try:
-                await ch.edit(overwrites=auth_ow)
+                await ch.edit(overwrites=_safe_ow(auth_ow))
             except discord.Forbidden:
                 pass
         _save("auth", ch)
