@@ -147,7 +147,40 @@ class AdminCog(commands.Cog):
             f"✅ {member.mention} привязан к серверу **{server}**.", ephemeral=True
         )
 
-    # ─── /setform ─────────────────────────────────────────────────────────
+    # ─── /syncmembers ─────────────────────────────────────────────────────
+    @_ADMIN_PERM
+    @app_commands.command(name="syncmembers", description="Синхронизировать БД серверов по текущим ролям всех участников")
+    async def syncmembers_cmd(self, interaction: discord.Interaction):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+
+        from cogs.servers import is_server_role
+
+        updated = skipped = cleared = 0
+        for member in interaction.guild.members:
+            if member.bot:
+                continue
+            server_roles = [r.name for r in member.roles if is_server_role(r.name)]
+            if len(server_roles) == 1:
+                db.set_user_server(member.id, server_roles[0])
+                updated += 1
+            elif not server_roles:
+                db.remove_user_server(member.id)
+                cleared += 1
+            else:
+                skipped += 1  # несколько ролей — не трогаем
+
+        await interaction.followup.send(
+            f"✅ Синхронизация завершена:\n"
+            f"• Обновлено: **{updated}**\n"
+            f"• Очищено (нет роли): **{cleared}**\n"
+            f"• Пропущено (несколько ролей): **{skipped}**",
+            ephemeral=True,
+        )
+
+
     @_ADMIN_PERM
     @app_commands.command(name="setform", description="Настроить шаблон формы")
     @app_commands.describe(type="Тип наказания")
