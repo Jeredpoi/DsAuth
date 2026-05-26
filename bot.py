@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 import traceback
 
 import discord
@@ -47,6 +48,19 @@ async def main():
         await bot.start(TOKEN)
 
 
+def _git_version() -> str:
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return f"{branch}@{commit}"
+    except Exception:
+        return "unknown"
+
+
 @bot.event
 async def on_ready():
     # Ensure member cache is fully populated so guild.me is never None
@@ -58,6 +72,7 @@ async def on_ready():
                 pass
     await bot.tree.sync()
     print(f"✅ {bot.user} (ID: {bot.user.id})")
+    print(f"   Версия: {_git_version()}")
     print(f"   Серверов: {len(bot.guilds)}")
     print("   Используйте !sync на сервере для мгновенной синхронизации команд.")
 
