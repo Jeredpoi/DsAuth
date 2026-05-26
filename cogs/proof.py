@@ -897,10 +897,21 @@ async def _post_form(
         cat_by_id = guild.get_channel(cat_id_db) if cat_id_db else None
         all_db   = get_all_server_channels(guild.id, server)
         actor_roles = [r.name for r in getattr(actor, "roles", []) if r.name != "@everyone"]
-        bot_perms   = guild.me.guild_permissions if guild.me else None
         server_src  = ("override" if server_override
                        else ("role" if any(r.name == server for r in getattr(actor, "roles", []))
                              else "db"))
+        me = guild.me
+        if me is None:
+            bot_perm_str = "`bot=guild.me is None ❌`"
+        elif me.guild_permissions.administrator:
+            bot_perm_str = "`bot=ADMINISTRATOR ✓`"
+        else:
+            p = me.guild_permissions
+            bot_perm_str = (
+                f"`bot manage_channels={'✓' if p.manage_channels else '✗'}` "
+                f"`manage_roles={'✓' if p.manage_roles else '✗'}` "
+                f"`send_messages={'✓' if p.send_messages else '✗'}`"
+            )
         diag_lines = [
             f"`сервер={server}` `src={server_src}` `форма={form_type}`",
             f"`actor={'Member' if getattr(actor, 'roles', None) else 'User'}` "
@@ -911,9 +922,7 @@ async def _post_form(
             f"`cat_by_db_id={'найдена' if isinstance(cat_by_id, discord.CategoryChannel) else 'None'} ({cat_id_db})`",
             f"`ch_in_cat={[c.name for c in cat.channels] if cat else []}`",
             f"`all_db={dict(all_db)}`",
-            f"`bot manage_channels={'✓' if bot_perms and bot_perms.manage_channels else '✗'}` "
-            f"`manage_roles={'✓' if bot_perms and bot_perms.manage_roles else '✗'}` "
-            f"`send_messages={'✓' if bot_perms and bot_perms.send_messages else '✗'}`",
+            bot_perm_str,
         ]
         if ensure_error:
             diag_lines.append(f"`ensure_error={ensure_error}`")
