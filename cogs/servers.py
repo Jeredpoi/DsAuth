@@ -155,6 +155,7 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
             return
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             guild_cfg["status_message_id"] = 0
+            save_config(cfg)
 
     try:
         msg = await ch.send(embed=embed, view=view)

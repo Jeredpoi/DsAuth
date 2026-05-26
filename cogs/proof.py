@@ -802,9 +802,6 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
          - Multiple     → return error asking to specify
       3. DB fallback (set_user_server) — only if no role at all
     """
-    member_roles = [r.name for r in getattr(member, "roles", [])]
-    print(f"[_resolve_server] member={getattr(member,'id',member)} override={server_override!r} roles={member_roles}", flush=True)
-
     if server_override:
         if not (server_override.isdigit() and 1 <= int(server_override) <= 90):
             return None, f"❌ Некорректный номер сервера: **{server_override}** (должно быть 1–90)."
