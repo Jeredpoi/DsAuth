@@ -679,26 +679,24 @@ class DeleteCategoryView(discord.ui.View):
 async def _update_bot_presence(bot: commands.Bot):
     global _presence_index
     from db import all_user_servers, get_global_form_counts
+    from datetime import datetime
     mods = len(all_user_servers())
-    total_forms, _ = get_global_form_counts()
+    total_forms, approved = get_global_form_counts()
+    ping_ms = round(bot.latency * 1000)
 
-    idx = _presence_index % 3
+    activities = [
+        discord.Activity(type=discord.ActivityType.watching,  name=f"за {mods} модераторами 🛡️"),
+        discord.Activity(type=discord.ActivityType.watching,  name=f"{total_forms} форм | ✅ {approved} одобрено"),
+        discord.Activity(type=discord.ActivityType.listening, name="/proof • /auth • /banform"),
+        discord.Activity(type=discord.ActivityType.watching,  name=f"пинг {ping_ms}мс 📡"),
+        discord.Game(name="Black Russia Moderation"),
+    ]
+
+    activity = activities[_presence_index % len(activities)]
     _presence_index += 1
 
-    if idx == 0:
-        activity = discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f"за {mods} модераторами",
-        )
-    elif idx == 1:
-        activity = discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f"{total_forms} форм обработано",
-        )
-    else:
-        activity = discord.Game(name="FormBot | /proof /auth")
-
-    await bot.change_presence(status=discord.Status.online, activity=activity)
+    status = discord.Status.online if ping_ms < 500 else discord.Status.idle
+    await bot.change_presence(status=status, activity=activity)
 
 
 class ServersCog(commands.Cog):
@@ -722,7 +720,7 @@ class ServersCog(commands.Cog):
     async def before_status_loop(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(hours=1)
+    @tasks.loop(minutes=15)
     async def presence_loop(self):
         await _update_bot_presence(self.bot)
 
