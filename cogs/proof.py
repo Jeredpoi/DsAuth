@@ -177,7 +177,7 @@ def _make_layout_view(
 
     manage_btn = discord.ui.Button(
         label="⚙️ Управление",
-        style=discord.ButtonStyle.secondary,
+        style=discord.ButtonStyle.success,
         custom_id="punishment:manage",
         disabled=done,
     )
@@ -203,18 +203,17 @@ def _make_layout_view(
 
     container_items: list = []
 
-    # Header: title + moderator (no thumbnail here — avatar shown below with a clear label)
-    container_items.append(discord.ui.TextDisplay(header_text))
-    container_items.append(discord.ui.Separator())
-
-    # Violator avatar — labeled explicitly so it's not confused with the moderator's avatar
+    # Header with violator avatar on the right
     if violator_avatar_url:
         container_items.append(
             discord.ui.Section(
-                discord.ui.TextDisplay("-# 👤 Нарушитель"),
+                discord.ui.TextDisplay(header_text),
                 accessory=discord.ui.Thumbnail(violator_avatar_url),
             )
         )
+    else:
+        container_items.append(discord.ui.TextDisplay(header_text))
+    container_items.append(discord.ui.Separator())
 
     if is_banform and not done:
         # Fields with Approve on the right; Reject below
@@ -453,10 +452,13 @@ async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: disc
 
 class AddEvidenceModal(discord.ui.Modal, title="Добавить доказательство"):
     url_input = discord.ui.TextInput(
-        label="Ссылка на доказательство (или несколько через пробел)",
-        placeholder="https://cdn.discordapp.com/attachments/...",
+        label="Ссылка(и) на доказательство",
+        placeholder=(
+            "Вставьте URL(ы) через пробел или с новой строки.\n"
+            "Фото: загрузи в Discord → ПКМ → Копировать ссылку на медиа"
+        ),
         style=discord.TextStyle.paragraph,
-        max_length=800,
+        max_length=1000,
         required=True,
     )
 
@@ -467,7 +469,12 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
     async def on_submit(self, interaction: discord.Interaction):
         new_urls = [u.strip() for u in self.url_input.value.split() if u.strip().startswith("http")]
         if not new_urls:
-            await interaction.response.send_message("❌ Укажите корректную ссылку (http...).", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ Ссылка не найдена.\n"
+                "-# Как добавить фото: загрузи его в любой канал Discord → "
+                "нажми ПКМ на фото → **Копировать ссылку на медиа** → вставь сюда.",
+                ephemeral=True,
+            )
             return
 
         existing = _extract_evidence_urls(self.proof_message.components)
@@ -568,9 +575,19 @@ class OwnerManageView(discord.ui.View):
         super().__init__(timeout=120)
         self.proof_message = proof_message
 
-    @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.primary)
     async def add_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AddEvidenceModal(self.proof_message))
+
+    @discord.ui.button(label="📷 Как добавить фото", style=discord.ButtonStyle.secondary)
+    async def photo_help(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "**Как добавить фото как доказательство:**\n"
+            "1. Загрузи фото в любой канал Discord (можно в ЛС себе)\n"
+            "2. Нажми ПКМ на фото → **Копировать ссылку на медиа**\n"
+            "3. Нажми **📎 Добавить доказательство** и вставь ссылку",
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
     async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
