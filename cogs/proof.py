@@ -813,7 +813,6 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
             )
         return server_override, None
 
-    from cogs.servers import is_server_role
     server_roles = [r.name for r in getattr(member, "roles", []) if is_server_role(r.name)]
 
     if len(server_roles) == 1:
@@ -826,7 +825,7 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
             "Укажите нужный через параметр `server`, например: `/proof server:49 ...`"
         )
 
-    # No server role — try DB
+    # No server role at all — try DB
     member_id = getattr(member, "id", None)
     if member_id:
         from db import get_user_server

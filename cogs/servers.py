@@ -64,22 +64,27 @@ def _ch_by_id_or_name(
     id_key: str,
     ch_name: str,
 ) -> discord.TextChannel | None:
-    """Look up a server channel: DB first, then category-name fallback."""
-    from db import get_server_channel, clear_server_channel
+    """Look up a server channel: DB first, then category-name fallback, then guild-wide."""
+    from db import get_server_channel, clear_server_channel, set_server_channel
     ch_id = get_server_channel(guild.id, server, id_key)
     if ch_id:
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
-        # Stale ID — channel deleted or not a text channel; clear it
+        # Stale ID — channel deleted; clear so it gets recreated next time
         clear_server_channel(guild.id, server, id_key)
-    # fallback: find by category name
+
+    # Fallback 1: find by category object
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
         ch = discord.utils.get(category.channels, name=ch_name)
         if isinstance(ch, discord.TextChannel):
-            # Save the found channel back to DB so next lookup is fast
-            from db import set_server_channel
+            set_server_channel(guild.id, server, id_key, ch.id)
+            return ch
+
+    # Fallback 2: guild-wide search — channel has name ch_name in a category named server
+    for ch in guild.text_channels:
+        if ch.name == ch_name and ch.category and ch.category.name == str(server):
             set_server_channel(guild.id, server, id_key, ch.id)
             return ch
     return None
@@ -530,6 +535,9 @@ class DeleteCategoryView(discord.ui.View):
             guild_cfg = get_guild_cfg(self.cfg, guild.id)
             guild_cfg.get("servers", {}).pop(self.server, None)
             save_config(self.cfg)
+            from db import clear_server_channel
+            for key in ("chat", "proof", "banform", "leadership", "logs", "auth", "category_id"):
+                clear_server_channel(guild.id, self.server, key)
 
         self.stop()
         msg = f"🗑️ Категория **{self.server}** удалена ({deleted} каналов)."
@@ -648,7 +656,10 @@ class ServersCog(commands.Cog):
             await ensure_server_channels(interaction.guild, server, self.bot.cfg)
             await interaction.followup.send(f"✅ Каналы для сервера **{server}** созданы/обновлены.", ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
+            await interaction.followup.send("❌ Нет прав для создания каналов/ролей.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Ошибка при создании каналов: `{e}`", ephemeral=True)
+            import traceback; traceback.print_exc()
 
     @app_commands.default_permissions(administrator=True)
     @app_commands.command(name="manage-category", description="Управление категориями серверов")

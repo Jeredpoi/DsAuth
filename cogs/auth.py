@@ -90,7 +90,7 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             try:
                 await ensure_server_channels(guild, server_val, cfg)
                 dest_ch = get_auth_applications_channel(guild, cfg, server_val)
-            except discord.Forbidden:
+            except Exception:
                 pass
 
         # Fallback: global review channel if configured
