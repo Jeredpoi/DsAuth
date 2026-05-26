@@ -550,7 +550,7 @@ class LeaderManageView(discord.ui.View):
     """Shown to leadership (КМ+) for any form — delete without time restriction."""
 
     def __init__(self, proof_message: discord.Message):
-        super().__init__(timeout=60)
+        super().__init__(timeout=None)
         self.proof_message = proof_message
 
     @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
@@ -572,7 +572,7 @@ class OwnerManageView(discord.ui.View):
     """Ephemeral panel shown to the form's author."""
 
     def __init__(self, proof_message: discord.Message):
-        super().__init__(timeout=120)
+        super().__init__(timeout=None)
         self.proof_message = proof_message
 
     @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.primary)

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime
 
 import discord
 from discord import app_commands
@@ -9,6 +10,7 @@ from helpers import save_config, get_guild_cfg, LEADERSHIP_RANKS, RANKS, RANK_LE
 
 _BOT_START_TIME = time.time()
 _SERVER_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+_presence_index = 0
 
 
 def _get_server_lock(guild_id: int, server: str) -> asyncio.Lock:
@@ -128,7 +130,7 @@ async def _status_refresh_callback(interaction: discord.Interaction):
 
 
 def _build_status_embed(bot) -> discord.Embed:
-    from db import all_user_servers, get_global_form_counts
+    from db import all_user_servers, get_global_form_counts, _conn
     elapsed = int(time.time() - _BOT_START_TIME)
     h, rem = divmod(elapsed, 3600)
     m, s = divmod(rem, 60)
@@ -136,6 +138,17 @@ def _build_status_embed(bot) -> discord.Embed:
     mod_count = len(all_user_servers())
     ping_ms = round(bot.latency * 1000)
     status_icon = "🟢" if ping_ms < 200 else "🟡" if ping_ms < 500 else "🔴"
+
+    with _conn() as c:
+        rejected_forms = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE status='rejected'"
+        ).fetchone()[0]
+    pending_forms = total_forms - approved_forms - rejected_forms
+    today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    with _conn() as c:
+        today_forms = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE ts >= ?", (today_ts,)
+        ).fetchone()[0]
 
     embed = discord.Embed(
         title="📡 Статус бота",
@@ -148,6 +161,9 @@ def _build_status_embed(bot) -> discord.Embed:
     embed.add_field(name="👥 Модераторов в БД",  value=str(mod_count),                 inline=True)
     embed.add_field(name="📋 Форм всего",        value=str(total_forms),               inline=True)
     embed.add_field(name="✅ Одобрено",          value=str(approved_forms),            inline=True)
+    embed.add_field(name="📊 Отклонено",         value=str(rejected_forms),            inline=True)
+    embed.add_field(name="⏳ На рассмотрении",   value=str(max(pending_forms, 0)),     inline=True)
+    embed.add_field(name="🗓️ Форм сегодня",      value=str(today_forms),               inline=True)
     embed.set_footer(text="Обновлено")
     return embed
 
@@ -175,6 +191,100 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
     try:
         msg = await ch.send(embed=embed, view=view)
         guild_cfg["status_message_id"] = msg.id
+        save_config(cfg)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def post_monitoring_stats(guild: discord.Guild, cfg: dict, bot) -> None:
+    """Post per-server form stats to 📊-статистика-форм channel."""
+    ch = get_monitoring_channel(guild, cfg, "📊-статистика-форм")
+    if not ch:
+        return
+    from db import _conn, all_user_servers
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT mod_id, COUNT(*) as total, "
+            "SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) as approved, "
+            "SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) as rejected "
+            "FROM form_stats GROUP BY mod_id ORDER BY total DESC LIMIT 15"
+        ).fetchall()
+
+    if not rows:
+        return
+
+    embed = discord.Embed(
+        title="📊 Статистика форм по модераторам",
+        color=0x3498DB,
+        timestamp=discord.utils.utcnow(),
+    )
+    lines = []
+    for i, row in enumerate(rows, 1):
+        lines.append(
+            f"`{i:2}.` <@{row['mod_id']}> — "
+            f"✅{row['approved']} ❌{row['rejected']} 📋{row['total']}"
+        )
+    embed.description = "\n".join(lines)
+    embed.set_footer(text="Обновлено")
+
+    msg_id = guild_cfg.get("stats_message_id", 0)
+    if msg_id:
+        try:
+            msg = await ch.fetch_message(msg_id)
+            await msg.edit(embed=embed)
+            return
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            guild_cfg["stats_message_id"] = 0
+    try:
+        msg = await ch.send(embed=embed)
+        guild_cfg["stats_message_id"] = msg.id
+        save_config(cfg)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+async def post_monitoring_activity(guild: discord.Guild, cfg: dict, bot) -> None:
+    """Post today's moderator activity to 👥-активность-модов channel."""
+    ch = get_monitoring_channel(guild, cfg, "👥-активность-модов")
+    if not ch:
+        return
+    from db import _conn
+    today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT mod_id, COUNT(*) as total, "
+            "SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) as approved "
+            "FROM form_stats WHERE ts >= ? GROUP BY mod_id ORDER BY total DESC",
+            (today_ts,)
+        ).fetchall()
+
+    embed = discord.Embed(
+        title="👥 Активность модераторов сегодня",
+        color=0x9B59B6,
+        timestamp=discord.utils.utcnow(),
+    )
+    if rows:
+        lines = [f"<@{r['mod_id']}> — 📋{r['total']} (✅{r['approved']})" for r in rows]
+        embed.description = "\n".join(lines)
+    else:
+        embed.description = "_Сегодня форм ещё не было._"
+    embed.set_footer(text="Обновлено")
+
+    guild_cfg = get_guild_cfg(cfg, guild.id)
+    msg_id = guild_cfg.get("activity_message_id", 0)
+    if msg_id:
+        try:
+            msg = await ch.fetch_message(msg_id)
+            await msg.edit(embed=embed)
+            return
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            guild_cfg["activity_message_id"] = 0
+    try:
+        msg = await ch.send(embed=embed)
+        guild_cfg["activity_message_id"] = msg.id
         save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
         pass
@@ -256,8 +366,10 @@ async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
         readonly_all[r] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
     channels = [
-        ("📡-статус-бота", "Статус и аптайм бота",                      readonly_lead),
-        ("🔔-авторизации", "Журнал авторизаций, кандидатов и кик-логов", readonly_all),
+        ("📡-статус-бота",        "Статус и аптайм бота",                      readonly_lead),
+        ("🔔-авторизации",        "Журнал авторизаций, кандидатов и кик-логов", readonly_all),
+        ("📊-статистика-форм",    "Статистика форм по серверам",                readonly_lead),
+        ("👥-активность-модов",   "Активность модераторов за сегодня",          readonly_lead),
     ]
     guild_cfg = get_guild_cfg(cfg, guild.id)
     monitoring_ids = guild_cfg.setdefault("monitoring", {})
@@ -565,17 +677,28 @@ class DeleteCategoryView(discord.ui.View):
 # ─── Cog ─────────────────────────────────────────────────────────────────────
 
 async def _update_bot_presence(bot: commands.Bot):
-    from db import all_user_servers
+    global _presence_index
+    from db import all_user_servers, get_global_form_counts
     mods = len(all_user_servers())
-    guilds = len(bot.guilds)
-    ping_ms = round(bot.latency * 1000)
-    await bot.change_presence(
-        status=discord.Status.online,
-        activity=discord.Activity(
+    total_forms, _ = get_global_form_counts()
+
+    idx = _presence_index % 3
+    _presence_index += 1
+
+    if idx == 0:
+        activity = discord.Activity(
             type=discord.ActivityType.watching,
-            name=f"{mods} мод. | {guilds} серв. | {ping_ms}мс",
-        ),
-    )
+            name=f"за {mods} модераторами",
+        )
+    elif idx == 1:
+        activity = discord.Activity(
+            type=discord.ActivityType.watching,
+            name=f"{total_forms} форм обработано",
+        )
+    else:
+        activity = discord.Game(name="FormBot | /proof /auth")
+
+    await bot.change_presence(status=discord.Status.online, activity=activity)
 
 
 class ServersCog(commands.Cog):
@@ -588,10 +711,12 @@ class ServersCog(commands.Cog):
         self.status_loop.cancel()
         self.presence_loop.cancel()
 
-    @tasks.loop(hours=6)
+    @tasks.loop(hours=1)
     async def status_loop(self):
         for guild in self.bot.guilds:
             await post_monitoring_status(guild, self.bot.cfg, self.bot)
+            await post_monitoring_stats(guild, self.bot.cfg, self.bot)
+            await post_monitoring_activity(guild, self.bot.cfg, self.bot)
 
     @status_loop.before_loop
     async def before_status_loop(self):
@@ -609,6 +734,8 @@ class ServersCog(commands.Cog):
     async def on_ready(self):
         for guild in self.bot.guilds:
             await post_monitoring_status(guild, self.bot.cfg, self.bot)
+            await post_monitoring_stats(guild, self.bot.cfg, self.bot)
+            await post_monitoring_activity(guild, self.bot.cfg, self.bot)
             await self._startup_sync(guild)
         await _update_bot_presence(self.bot)
 
