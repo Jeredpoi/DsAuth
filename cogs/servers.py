@@ -62,16 +62,24 @@ def _ch_by_id_or_name(
     ch_name: str,
 ) -> discord.TextChannel | None:
     """Look up a server channel: saved ID first, then category-name fallback."""
-    sc = _server_cfg(cfg, guild.id, server)
-    ch_id = sc.get(id_key, 0)
+    guild_servers = get_guild_cfg(cfg, guild.id).setdefault("servers", {}).setdefault(str(server), {})
+    ch_id = guild_servers.get(id_key, 0)
     if ch_id:
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
+        # Channel deleted — clear stale ID so fallback works cleanly
+        guild_servers.pop(id_key, None)
+        save_config(cfg)
     # fallback: find by category name
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
-        return discord.utils.get(guild.text_channels, name=ch_name, category=category)
+        ch = discord.utils.get(guild.text_channels, name=ch_name, category=category)
+        if ch:
+            # Save found ID for next time
+            guild_servers[id_key] = ch.id
+            save_config(cfg)
+        return ch
     return None
 
 

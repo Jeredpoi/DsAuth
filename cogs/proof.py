@@ -871,14 +871,16 @@ async def _post_form(
             await ensure_server_channels(guild, server, cfg)
             proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                         else get_proof_channel(guild, cfg, server))
-        except discord.Forbidden:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
         await interaction.followup.send(
             f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
-            f"Попросите администратора запустить `/setupserver {server}`.",
+            f"Привяжите существующий канал: `/linkserver server:{server} "
+            f"{'banform' if is_ban else 'proof'}:#канал`\n"
+            f"Или создайте новые каналы: `/setupserver {server}`",
             ephemeral=True,
         )
         return
