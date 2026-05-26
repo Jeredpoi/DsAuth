@@ -1165,22 +1165,24 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("✅ Незакрытых форм нет.", ephemeral=True)
             return
 
-        lines = [f"**⏳ Незакрытые формы банов: {len(results)}**\n"]
+        header = f"**⏳ Незакрытые формы банов: {len(results)}**\n"
+        lines: list[str] = []
         for srv, msg in results:
             data = _extract_v2_data(msg)
-            mod_id    = data.get("mod_id", 0)
-            user_id   = data.get("user_id", 0)
+            mod_id     = data.get("mod_id", 0)
+            user_id    = data.get("user_id", 0)
             punishment = data.get("punishment", "?")
             age_h = int((discord.utils.utcnow() - msg.created_at).total_seconds() / 3600)
-            lines.append(
+            line = (
                 f"• Сервер **{srv}** | <@{mod_id}> → <@{user_id}> | {punishment} | "
                 f"ожидает **{age_h}ч** | [перейти]({msg.jump_url})"
             )
-            if len(lines) >= 26:  # Discord embed limit
+            if len(header) + len("\n".join(lines)) + len(line) + 20 > 1900:
                 lines.append("…и ещё есть.")
                 break
+            lines.append(line)
 
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        await interaction.followup.send(header + "\n".join(lines), ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
