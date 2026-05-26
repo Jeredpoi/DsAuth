@@ -65,16 +65,23 @@ def _ch_by_id_or_name(
     ch_name: str,
 ) -> discord.TextChannel | None:
     """Look up a server channel: DB first, then category-name fallback."""
-    from db import get_server_channel
+    from db import get_server_channel, clear_server_channel
     ch_id = get_server_channel(guild.id, server, id_key)
     if ch_id:
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
+        # Stale ID — channel deleted or not a text channel; clear it
+        clear_server_channel(guild.id, server, id_key)
     # fallback: find by category name
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
-        return discord.utils.get(guild.text_channels, name=ch_name, category=category)
+        ch = discord.utils.get(category.channels, name=ch_name)
+        if isinstance(ch, discord.TextChannel):
+            # Save the found channel back to DB so next lookup is fast
+            from db import set_server_channel
+            set_server_channel(guild.id, server, id_key, ch.id)
+            return ch
     return None
 
 
