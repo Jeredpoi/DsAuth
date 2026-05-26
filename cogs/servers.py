@@ -299,7 +299,17 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     channel_ids = guild_cfg.get("servers", {}).get(server, {}).copy()
     channel_ids["category_id"] = category.id
 
-    ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
+    def _valid_ch(key: str) -> discord.TextChannel | None:
+        """Return saved channel if it still exists — skip re-linking."""
+        ch_id = channel_ids.get(key, 0)
+        if ch_id:
+            ch = guild.get_channel(ch_id)
+            if isinstance(ch, discord.TextChannel):
+                return ch
+            channel_ids.pop(key, None)  # stale — clear it
+        return None
+
+    ch = _valid_ch("chat") or discord.utils.get(guild.text_channels, name="💬-общение", category=category)
     if not ch:
         ch = await guild.create_text_channel(
             name="💬-общение", category=category,
@@ -307,7 +317,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         )
     channel_ids["chat"] = ch.id
 
-    ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
+    ch = _valid_ch("proof") or discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
     if not ch:
         ch = await guild.create_text_channel(
             name="📋-выдача-наказаний", category=category,
@@ -315,7 +325,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         )
     channel_ids["proof"] = ch.id
 
-    ch = discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
+    ch = _valid_ch("banform") or discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
     if not ch:
         ch = await guild.create_text_channel(
             name="⚖️-формы-банов", category=category,
@@ -348,7 +358,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     for role in leadership_roles:
         log_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
-    ch = discord.utils.get(guild.text_channels, name="📊-логи", category=category)
+    ch = _valid_ch("logs") or discord.utils.get(guild.text_channels, name="📊-логи", category=category)
     if not ch:
         ch = await guild.create_text_channel(
             name="📊-логи", category=category,
@@ -370,7 +380,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     for role in leadership_roles:
         auth_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
-    ch = discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
+    ch = _valid_ch("auth") or discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
     if not ch:
         ch = await guild.create_text_channel(
             name="📋-заявки-авт", category=category,
