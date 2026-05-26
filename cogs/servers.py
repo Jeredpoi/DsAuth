@@ -293,8 +293,16 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     channel_ids["category_id"] = category.id
 
     def _has_linked(key: str) -> bool:
-        """True if a channel ID is already saved — trust it, skip auto-creation."""
-        return bool(channel_ids.get(key, 0))
+        """True if a saved channel ID still points to a real channel."""
+        ch_id = channel_ids.get(key, 0)
+        if not ch_id:
+            return False
+        ch = guild.get_channel(ch_id)
+        if isinstance(ch, discord.TextChannel):
+            return True
+        # Channel was deleted — remove stale ID so it gets recreated
+        channel_ids.pop(key, None)
+        return False
 
     if not _has_linked("chat"):
         ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
