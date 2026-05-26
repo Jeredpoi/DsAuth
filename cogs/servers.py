@@ -338,8 +338,6 @@ async def _ensure_common_channels(guild: discord.Guild):
 
 async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
     everyone = guild.default_role
-    all_mod_roles = [r for r in guild.roles if r.name in RANKS]
-    lead_roles    = [r for r in guild.roles if r.name in LEADERSHIP_RANKS]
 
     category = discord.utils.get(guild.categories, name=MONITORING_CATEGORY)
     if not category:
@@ -347,23 +345,18 @@ async def _ensure_monitoring_category(guild: discord.Guild, cfg: dict):
             everyone: discord.PermissionOverwrite(view_channel=False),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         }
-        for r in lead_roles:
-            cat_ow[r] = discord.PermissionOverwrite(view_channel=True)
         category = await guild.create_category(name=MONITORING_CATEGORY, overwrites=cat_ow)
 
+    # Monitoring is bot-only; only server admins see it via admin override
     readonly_lead = {
         everyone: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
-    for r in lead_roles:
-        readonly_lead[r] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
     readonly_all = {
         everyone: discord.PermissionOverwrite(view_channel=False),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
-    for r in all_mod_roles:
-        readonly_all[r] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
     channels = [
         ("📡-статус-бота",        "Статус и аптайм бота",                      readonly_lead),
@@ -437,6 +430,8 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
             server_role: discord.PermissionOverwrite(view_channel=True),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         })
+        for role in leadership_roles:
+            cat_ow[role] = discord.PermissionOverwrite(view_channel=True)
         try:
             category = await guild.create_category(name=cat_name, overwrites=cat_ow)
         except discord.Forbidden as fe:
@@ -462,25 +457,56 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     def _save(key: str, ch: discord.TextChannel):
         set_server_channel(guild.id, server, key, ch.id)
 
+    chat_ow = _safe_ow({
+        everyone: discord.PermissionOverwrite(view_channel=False),
+        server_role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    })
+    for role in leadership_roles:
+        chat_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
     if not _has_linked("chat"):
         ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
         if not ch:
-            ch = await _create_ch("💬-общение", category, {},
+            ch = await _create_ch("💬-общение", category, chat_ow,
                                   topic=f"Общение модераторов сервера {server}")
+        else:
+            try:
+                await ch.edit(overwrites=chat_ow)
+            except discord.Forbidden:
+                pass
         _save("chat", ch)
+
+    form_ow = _safe_ow({
+        everyone: discord.PermissionOverwrite(view_channel=False),
+        server_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    })
+    for role in leadership_roles:
+        form_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
 
     if not _has_linked("proof"):
         ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
         if not ch:
-            ch = await _create_ch("📋-выдача-наказаний", category, {},
+            ch = await _create_ch("📋-выдача-наказаний", category, form_ow,
                                   topic=f"Формы наказаний — сервер {server}")
+        else:
+            try:
+                await ch.edit(overwrites=form_ow)
+            except discord.Forbidden:
+                pass
         _save("proof", ch)
 
     if not _has_linked("banform"):
         ch = discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
         if not ch:
-            ch = await _create_ch("⚖️-формы-банов", category, {},
+            ch = await _create_ch("⚖️-формы-банов", category, form_ow,
                                   topic=f"Формы банов и глобальных банов — сервер {server}")
+        else:
+            try:
+                await ch.edit(overwrites=form_ow)
+            except discord.Forbidden:
+                pass
         _save("banform", ch)
 
     lead_ow = {
