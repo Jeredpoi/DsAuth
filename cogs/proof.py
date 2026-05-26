@@ -453,10 +453,7 @@ async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: disc
 class AddEvidenceModal(discord.ui.Modal, title="Добавить доказательство"):
     url_input = discord.ui.TextInput(
         label="Ссылка(и) на доказательство",
-        placeholder=(
-            "Вставьте URL(ы) через пробел или с новой строки.\n"
-            "Фото: загрузи в Discord → ПКМ → Копировать ссылку на медиа"
-        ),
+        placeholder="https://... (фото: загрузи в Discord → ПКМ на фото → Копировать ссылку)",
         style=discord.TextStyle.paragraph,
         max_length=1000,
         required=True,
