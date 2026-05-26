@@ -37,14 +37,17 @@ def get_server_for_member(member, cfg: dict | None = None) -> str | None:
     return None  # multiple server roles — ambiguous
 
 
-def _server_cfg(cfg: dict, guild_id: int, server: str) -> dict:
-    return get_guild_cfg(cfg, guild_id).get("servers", {}).get(str(server), {})
-
-
 def server_for_channel(guild: discord.Guild, cfg: dict, channel_id: int) -> str | None:
     """Return the server number that owns this channel, or None if not found."""
-    servers = get_guild_cfg(cfg, guild.id).get("servers", {})
-    for server, sc in servers.items():
+    from db import get_all_server_channels
+    guild_servers = get_guild_cfg(cfg, guild.id).get("servers", {})
+    all_servers = set(guild_servers.keys())
+    # also check any server that has this channel in DB
+    for cat in guild.categories:
+        if is_server_role(cat.name):
+            all_servers.add(cat.name)
+    for server in all_servers:
+        sc = get_all_server_channels(guild.id, server)
         if channel_id in (sc.get("proof"), sc.get("banform"), sc.get("logs"), sc.get("auth")):
             return server
     # fallback: check channel's category name
@@ -61,14 +64,13 @@ def _ch_by_id_or_name(
     id_key: str,
     ch_name: str,
 ) -> discord.TextChannel | None:
-    """Look up a server channel: saved ID first, then category-name fallback."""
-    guild_servers = get_guild_cfg(cfg, guild.id).setdefault("servers", {}).setdefault(str(server), {})
-    ch_id = guild_servers.get(id_key, 0)
+    """Look up a server channel: DB first, then category-name fallback."""
+    from db import get_server_channel
+    ch_id = get_server_channel(guild.id, server, id_key)
     if ch_id:
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
-        # get_channel returned None — could be cache miss, don't clear ID
     # fallback: find by category name
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
@@ -172,6 +174,11 @@ def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.Tex
 
 def get_auth_applications_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
     return _ch_by_id_or_name(guild, cfg, server, "auth", "📋-заявки-авт")
+
+
+def _save_channel_to_db(guild_id: int, server: str, key: str, ch: discord.TextChannel):
+    from db import set_server_channel
+    set_server_channel(guild_id, server, key, ch.id)
 
 
 async def _ensure_common_channels(guild: discord.Guild):
@@ -288,21 +295,24 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         }
         category = await guild.create_category(name=cat_name, overwrites=cat_ow)
 
-    # Preserve existing IDs; only overwrite keys we explicitly create/find
-    channel_ids = guild_cfg.get("servers", {}).get(server, {}).copy()
-    channel_ids["category_id"] = category.id
+    from db import get_server_channel, set_server_channel
+    set_server_channel(guild.id, server, "category_id", category.id)
 
     def _has_linked(key: str) -> bool:
-        """True if a saved channel ID still points to a real channel."""
-        ch_id = channel_ids.get(key, 0)
+        """True if DB has a channel ID that still points to a real channel."""
+        ch_id = get_server_channel(guild.id, server, key)
         if not ch_id:
             return False
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return True
-        # Channel was deleted — remove stale ID so it gets recreated
-        channel_ids.pop(key, None)
+        # Channel was deleted — clear stale ID so it gets recreated
+        from db import clear_server_channel
+        clear_server_channel(guild.id, server, key)
         return False
+
+    def _save(key: str, ch: discord.TextChannel):
+        set_server_channel(guild.id, server, key, ch.id)
 
     if not _has_linked("chat"):
         ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
@@ -311,7 +321,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
                 name="💬-общение", category=category,
                 topic=f"Общение модераторов сервера {server}",
             )
-        channel_ids["chat"] = ch.id
+        _save("chat", ch)
 
     if not _has_linked("proof"):
         ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
@@ -320,7 +330,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
                 name="📋-выдача-наказаний", category=category,
                 topic=f"Формы наказаний — сервер {server}",
             )
-        channel_ids["proof"] = ch.id
+        _save("proof", ch)
 
     if not _has_linked("banform"):
         ch = discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
@@ -329,7 +339,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
                 name="⚖️-формы-банов", category=category,
                 topic=f"Формы банов и глобальных банов — сервер {server}",
             )
-        channel_ids["banform"] = ch.id
+        _save("banform", ch)
 
     lead_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
@@ -339,14 +349,15 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     for role in leadership_roles:
         lead_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
-    ch = discord.utils.get(guild.text_channels, name="👑-руководство", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="👑-руководство", category=category,
-            overwrites=lead_ow,
-            topic=f"Руководство сервера {server}",
-        )
-    channel_ids["leadership"] = ch.id
+    if not _has_linked("leadership"):
+        ch = discord.utils.get(guild.text_channels, name="👑-руководство", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="👑-руководство", category=category,
+                overwrites=lead_ow,
+                topic=f"Руководство сервера {server}",
+            )
+        _save("leadership", ch)
 
     log_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
@@ -369,7 +380,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
                 await ch.edit(overwrites=log_ow)
             except discord.Forbidden:
                 pass
-        channel_ids["logs"] = ch.id
+        _save("logs", ch)
 
     auth_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
@@ -392,7 +403,7 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
                 await ch.edit(overwrites=auth_ow)
             except discord.Forbidden:
                 pass
-        channel_ids["auth"] = ch.id
+        _save("auth", ch)
 
     for i in (1, 2):
         vc_name = f"🔊 {server} | Голосовой {i}"
@@ -401,10 +412,8 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
 
     await _ensure_common_channels(guild)
 
-    guild_cfg.setdefault("servers", {})[server] = channel_ids
-    save_config(cfg)
-
-    return channel_ids
+    from db import get_all_server_channels
+    return get_all_server_channels(guild.id, server)
 
 
 # ─── Delete confirmation view ─────────────────────────────────────────────────
@@ -665,27 +674,33 @@ class ServersCog(commands.Cog):
             )
             return
 
-        cfg = self.bot.cfg
-        guild_cfg = get_guild_cfg(cfg, interaction.guild.id)
-        sc = guild_cfg.setdefault("servers", {}).setdefault(server, {})
+        from db import set_server_channel
 
-        lines = []
-        if proof:
-            sc["proof"] = proof.id
-            lines.append(f"📋 Наказания → {proof.mention}")
-        if banform:
-            sc["banform"] = banform.id
-            lines.append(f"⚖️ Баны → {banform.mention}")
-        if logs:
-            sc["logs"] = logs.id
-            lines.append(f"📊 Логи → {logs.mention}")
-        if auth:
-            sc["auth"] = auth.id
-            lines.append(f"📋 Авт. заявки → {auth.mention}")
+        changed_lines = []
+        same_lines = []
 
-        save_config(cfg)
+        for key, ch, label in [
+            ("proof",   proof,   "📋 Наказания"),
+            ("banform", banform, "⚖️ Баны"),
+            ("logs",    logs,    "📊 Логи"),
+            ("auth",    auth,    "📋 Авт. заявки"),
+        ]:
+            if ch is None:
+                continue
+            updated = set_server_channel(interaction.guild.id, server, key, ch.id)
+            if updated:
+                changed_lines.append(f"{label} → {ch.mention}")
+            else:
+                same_lines.append(f"{label} → {ch.mention} (ID идентичен, замена не произошла)")
+
+        parts = []
+        if changed_lines:
+            parts.append("✅ Привязано:\n" + "\n".join(changed_lines))
+        if same_lines:
+            parts.append("ℹ️ Без изменений:\n" + "\n".join(same_lines))
+
         await interaction.response.send_message(
-            f"✅ Сервер **{server}** привязан:\n" + "\n".join(lines),
+            f"**Сервер {server}**\n" + "\n\n".join(parts),
             ephemeral=True,
         )
 

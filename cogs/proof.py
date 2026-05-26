@@ -905,10 +905,8 @@ async def _post_form(
     except discord.NotFound:
         # Channel was deleted — clear stale ID so next call recreates it
         id_key = "banform" if is_ban else "proof"
-        sc = get_guild_cfg(cfg, guild.id).get("servers", {}).get(server, {})
-        sc.pop(id_key, None)
-        from helpers import save_config
-        save_config(cfg)
+        from db import clear_server_channel
+        clear_server_channel(guild.id, server, id_key)
         await interaction.followup.send(
             f"❌ Канал был удалён (сервер **{server}**). Попробуйте снова — бот пересоздаст его.",
             ephemeral=True,

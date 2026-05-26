@@ -42,6 +42,14 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_form_stats_mod ON form_stats(mod_id, ts);
+
+        CREATE TABLE IF NOT EXISTS server_channels (
+            guild_id   TEXT NOT NULL,
+            server     TEXT NOT NULL,
+            key        TEXT NOT NULL,
+            channel_id INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, server, key)
+        );
         """)
 
 
@@ -117,6 +125,54 @@ def set_auth_cooldown(user_id: int):
 def clear_auth_cooldown(user_id: int):
     with _conn() as c:
         c.execute("DELETE FROM auth_cooldowns WHERE user_id=?", (str(user_id),))
+
+
+# ─── server_channels ──────────────────────────────────────────────────────────
+
+def get_server_channel(guild_id: int, server: str, key: str) -> int:
+    """Return channel_id for (guild, server, key), or 0 if not set."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT channel_id FROM server_channels WHERE guild_id=? AND server=? AND key=?",
+            (str(guild_id), str(server), key),
+        ).fetchone()
+        return row["channel_id"] if row else 0
+
+
+def set_server_channel(guild_id: int, server: str, key: str, channel_id: int) -> bool:
+    """
+    Save (guild, server, key) → channel_id.
+    Returns True if the value changed, False if it was already the same.
+    """
+    existing = get_server_channel(guild_id, server, key)
+    if existing == channel_id:
+        return False
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO server_channels (guild_id, server, key, channel_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(guild_id, server, key) DO UPDATE SET channel_id=excluded.channel_id""",
+            (str(guild_id), str(server), key, channel_id),
+        )
+    return True
+
+
+def get_all_server_channels(guild_id: int, server: str) -> dict[str, int]:
+    """Return {key: channel_id} for a server."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT key, channel_id FROM server_channels WHERE guild_id=? AND server=?",
+            (str(guild_id), str(server)),
+        ).fetchall()
+        return {r["key"]: r["channel_id"] for r in rows}
+
+
+def clear_server_channel(guild_id: int, server: str, key: str):
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM server_channels WHERE guild_id=? AND server=? AND key=?",
+            (str(guild_id), str(server), key),
+        )
 
 
 # ─── form stats ────────────────────────────────────────────────────────────────
