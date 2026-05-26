@@ -61,6 +61,7 @@ DEFAULT_TEMPLATE = (
 
 DEFAULT_CONFIG: dict = {
     "moderator_nick": "Ваш_Nick_Name",
+    "home_guild_id": 0,
     "templates": {
         "general": DEFAULT_TEMPLATE,
         "oral": "", "warn": "", "mute": "", "ban": "", "gban": "",
@@ -87,6 +88,7 @@ def load_config() -> dict:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             data = json.load(f)
         data.setdefault("moderator_nick", DEFAULT_CONFIG["moderator_nick"])
+        data.setdefault("home_guild_id", DEFAULT_CONFIG["home_guild_id"])
         data.setdefault("templates", DEFAULT_CONFIG["templates"].copy())
         data.setdefault("guilds", {})
         for k, v in DEFAULT_CONFIG["templates"].items():

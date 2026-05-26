@@ -31,6 +31,7 @@ bot = commands.Bot(
     chunk_guilds_at_startup=True,
 )
 cfg = load_config()
+cfg["home_guild_id"] = 1504395064175099985  # главный сервер где созданы все каналы
 db.migrate_from_json(cfg)   # переносит user_servers и stats.json → SQLite (один раз)
 bot.cfg = cfg
 bot.owner_id_cfg = OWNER_ID

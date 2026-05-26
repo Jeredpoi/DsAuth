@@ -857,7 +857,6 @@ async def _post_form(
 
     # Ensure we have a Member (with .roles); fall back to interaction.user if cache misses
     actor = guild.get_member(interaction.user.id) if guild else None
-    actor_type = "Member" if actor else "User(no roles)"
     if not actor:
         actor = interaction.user
     server, err = _resolve_server(actor, cfg, server_override)
@@ -869,18 +868,33 @@ async def _post_form(
 
     from db import get_server_channel
     db_key = "banform" if is_ban else "proof"
-    raw_id_before = get_server_channel(guild.id, server, db_key)
+
+    # Find the proof channel: try current guild first, then home guild
+    home_guild_id = int(cfg.get("home_guild_id") or 0)
+    home_guild = interaction.client.get_guild(home_guild_id) if home_guild_id else None
+    target_guild = guild  # guild where the channel lives
 
     proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                 else get_proof_channel(guild, cfg, server))
 
+    if not proof_ch and home_guild and home_guild.id != guild.id:
+        proof_ch = (get_banform_channel(home_guild, cfg, server) if is_ban
+                    else get_proof_channel(home_guild, cfg, server))
+        if proof_ch:
+            target_guild = home_guild
+
+    raw_id_before = get_server_channel(target_guild.id, server, db_key)
+
     ensure_error: str | None = None
     if not proof_ch:
-        # Auto-create channels for this server on first use
+        # Auto-create channels only on the home guild
+        create_guild = home_guild or guild
         try:
-            await ensure_server_channels(guild, server, cfg)
-            proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
-                        else get_proof_channel(guild, cfg, server))
+            await ensure_server_channels(create_guild, server, cfg)
+            proof_ch = (get_banform_channel(create_guild, cfg, server) if is_ban
+                        else get_proof_channel(create_guild, cfg, server))
+            if proof_ch:
+                target_guild = create_guild
         except discord.Forbidden as e:
             ensure_error = f"Forbidden: {e.text!r} code={e.code} status={e.status}"
         except Exception as e:
@@ -890,17 +904,17 @@ async def _post_form(
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
         from db import get_all_server_channels
-        raw_id   = get_server_channel(guild.id, server, db_key)
-        raw_ch   = guild.get_channel(raw_id) if raw_id else None
-        cat      = discord.utils.get(guild.categories, name=str(server))
-        cat_id_db = get_server_channel(guild.id, server, "category_id")
-        cat_by_id = guild.get_channel(cat_id_db) if cat_id_db else None
-        all_db   = get_all_server_channels(guild.id, server)
+        raw_id    = get_server_channel(target_guild.id, server, db_key)
+        raw_ch    = target_guild.get_channel(raw_id) if raw_id else None
+        cat       = discord.utils.get(target_guild.categories, name=str(server))
+        cat_id_db = get_server_channel(target_guild.id, server, "category_id")
+        cat_by_id = target_guild.get_channel(cat_id_db) if cat_id_db else None
+        all_db    = get_all_server_channels(target_guild.id, server)
         actor_roles = [r.name for r in getattr(actor, "roles", []) if r.name != "@everyone"]
         server_src  = ("override" if server_override
                        else ("role" if any(r.name == server for r in getattr(actor, "roles", []))
                              else "db"))
-        me = guild.me
+        me = target_guild.me
         bot_id = interaction.client.user.id if interaction.client.user else "?"
         if me is None:
             bot_perm_str = f"`bot=guild.me is None ❌ (bot_id={bot_id})`"
@@ -914,7 +928,7 @@ async def _post_form(
                 f"`send_messages={'✓' if p.send_messages else '✗'}`"
             )
         diag_lines = [
-            f"`сервер={server}` `src={server_src}` `форма={form_type}` `mfa_level={guild.mfa_level}`",
+            f"`сервер={server}` `src={server_src}` `форма={form_type}` `target={target_guild.id}` `home={home_guild_id}`",
             f"`actor={'Member' if getattr(actor, 'roles', None) else 'User'}` "
             f"`roles={actor_roles[:5]}`",
             f"`DB[{db_key}] before={raw_id_before} after={raw_id}` "
