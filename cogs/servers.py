@@ -292,39 +292,36 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     channel_ids = guild_cfg.get("servers", {}).get(server, {}).copy()
     channel_ids["category_id"] = category.id
 
-    def _valid_ch(key: str) -> discord.TextChannel | None:
-        """Return saved channel if it still exists — skip re-linking."""
-        ch_id = channel_ids.get(key, 0)
-        if ch_id:
-            ch = guild.get_channel(ch_id)
-            if isinstance(ch, discord.TextChannel):
-                return ch
-            channel_ids.pop(key, None)  # stale — clear it
-        return None
+    def _has_linked(key: str) -> bool:
+        """True if a channel ID is already saved — trust it, skip auto-creation."""
+        return bool(channel_ids.get(key, 0))
 
-    ch = _valid_ch("chat") or discord.utils.get(guild.text_channels, name="💬-общение", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="💬-общение", category=category,
-            topic=f"Общение модераторов сервера {server}",
-        )
-    channel_ids["chat"] = ch.id
+    if not _has_linked("chat"):
+        ch = discord.utils.get(guild.text_channels, name="💬-общение", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="💬-общение", category=category,
+                topic=f"Общение модераторов сервера {server}",
+            )
+        channel_ids["chat"] = ch.id
 
-    ch = _valid_ch("proof") or discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="📋-выдача-наказаний", category=category,
-            topic=f"Формы наказаний — сервер {server}",
-        )
-    channel_ids["proof"] = ch.id
+    if not _has_linked("proof"):
+        ch = discord.utils.get(guild.text_channels, name="📋-выдача-наказаний", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="📋-выдача-наказаний", category=category,
+                topic=f"Формы наказаний — сервер {server}",
+            )
+        channel_ids["proof"] = ch.id
 
-    ch = _valid_ch("banform") or discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="⚖️-формы-банов", category=category,
-            topic=f"Формы банов и глобальных банов — сервер {server}",
-        )
-    channel_ids["banform"] = ch.id
+    if not _has_linked("banform"):
+        ch = discord.utils.get(guild.text_channels, name="⚖️-формы-банов", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="⚖️-формы-банов", category=category,
+                topic=f"Формы банов и глобальных банов — сервер {server}",
+            )
+        channel_ids["banform"] = ch.id
 
     lead_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
@@ -351,19 +348,20 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     for role in leadership_roles:
         log_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
-    ch = _valid_ch("logs") or discord.utils.get(guild.text_channels, name="📊-логи", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="📊-логи", category=category,
-            overwrites=log_ow,
-            topic=f"Логи наказаний — сервер {server}",
-        )
-    else:
-        try:
-            await ch.edit(overwrites=log_ow)
-        except discord.Forbidden:
-            pass
-    channel_ids["logs"] = ch.id
+    if not _has_linked("logs"):
+        ch = discord.utils.get(guild.text_channels, name="📊-логи", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="📊-логи", category=category,
+                overwrites=log_ow,
+                topic=f"Логи наказаний — сервер {server}",
+            )
+        else:
+            try:
+                await ch.edit(overwrites=log_ow)
+            except discord.Forbidden:
+                pass
+        channel_ids["logs"] = ch.id
 
     auth_ow = {
         everyone: discord.PermissionOverwrite(view_channel=False),
@@ -373,19 +371,20 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
     for role in leadership_roles:
         auth_ow[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True)
 
-    ch = _valid_ch("auth") or discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
-    if not ch:
-        ch = await guild.create_text_channel(
-            name="📋-заявки-авт", category=category,
-            overwrites=auth_ow,
-            topic=f"Заявки на авторизацию — сервер {server}",
-        )
-    else:
-        try:
-            await ch.edit(overwrites=auth_ow)
-        except discord.Forbidden:
-            pass
-    channel_ids["auth"] = ch.id
+    if not _has_linked("auth"):
+        ch = discord.utils.get(guild.text_channels, name="📋-заявки-авт", category=category)
+        if not ch:
+            ch = await guild.create_text_channel(
+                name="📋-заявки-авт", category=category,
+                overwrites=auth_ow,
+                topic=f"Заявки на авторизацию — сервер {server}",
+            )
+        else:
+            try:
+                await ch.edit(overwrites=auth_ow)
+            except discord.Forbidden:
+                pass
+        channel_ids["auth"] = ch.id
 
     for i in (1, 2):
         vc_name = f"🔊 {server} | Голосовой {i}"
@@ -521,24 +520,6 @@ class ServersCog(commands.Cog):
             if len(server_roles) == 1:
                 set_user_server(member.id, server_roles[0])
 
-        # 2. Ensure channels exist for all known servers
-        cfg = self.bot.cfg
-        guild_cfg = get_guild_cfg(cfg, guild.id)
-        known_servers: set[str] = set()
-
-        # From config
-        known_servers.update(guild_cfg.get("servers", {}).keys())
-        # From current member roles
-        for member in guild.members:
-            for r in member.roles:
-                if is_server_role(r.name):
-                    known_servers.add(r.name)
-
-        for server in known_servers:
-            try:
-                await ensure_server_channels(guild, server, cfg)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
