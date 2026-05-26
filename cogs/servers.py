@@ -502,7 +502,41 @@ class ServersCog(commands.Cog):
     async def on_ready(self):
         for guild in self.bot.guilds:
             await post_monitoring_status(guild, self.bot.cfg, self.bot)
+            await self._startup_sync(guild)
         await _update_bot_presence(self.bot)
+
+    async def _startup_sync(self, guild: discord.Guild):
+        """Sync member DB entries and ensure all known server channels exist."""
+        from db import set_user_server, remove_user_server
+
+        # 1. Sync DB from current roles for every member
+        for member in guild.members:
+            if member.bot:
+                continue
+            server_roles = [r.name for r in member.roles if is_server_role(r.name)]
+            if len(server_roles) == 1:
+                set_user_server(member.id, server_roles[0])
+            elif not server_roles:
+                remove_user_server(member.id)
+
+        # 2. Ensure channels exist for all known servers
+        cfg = self.bot.cfg
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        known_servers: set[str] = set()
+
+        # From config
+        known_servers.update(guild_cfg.get("servers", {}).keys())
+        # From current member roles
+        for member in guild.members:
+            for r in member.roles:
+                if is_server_role(r.name):
+                    known_servers.add(r.name)
+
+        for server in known_servers:
+            try:
+                await ensure_server_channels(guild, server, cfg)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
