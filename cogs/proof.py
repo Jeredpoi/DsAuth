@@ -507,13 +507,16 @@ async def _log_form_deletion(
     interaction: discord.Interaction,
     data: dict,
     by_leader: bool,
+    proof_message: discord.Message | None = None,
 ) -> None:
     title     = data.get("title", "Наказание")
     user_id   = data.get("user_id", 0)
     punishment = data.get("punishment", "?")
     if not interaction.guild:
         return
-    server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
+    # Use the proof form's channel (not the ephemeral panel's channel) for server detection
+    form_channel_id = proof_message.channel.id if proof_message else interaction.message.channel.id
+    server = server_for_channel(interaction.guild, interaction.client.cfg, form_channel_id)
     if not server:
         return
     log_ch = get_log_channel(interaction.guild, interaction.client.cfg, server)
@@ -553,7 +556,7 @@ class LeaderManageView(discord.ui.View):
             await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, log_data, by_leader=True)
+        await _log_form_deletion(interaction, log_data, by_leader=True, proof_message=self.proof_message)
 
 
 # ─── Owner management panel ───────────────────────────────────────────────────
@@ -588,7 +591,7 @@ class OwnerManageView(discord.ui.View):
             await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, log_data, by_leader=is_leader)
+        await _log_form_deletion(interaction, log_data, by_leader=is_leader, proof_message=self.proof_message)
 
 
 # ─── Button callbacks ─────────────────────────────────────────────────────────
