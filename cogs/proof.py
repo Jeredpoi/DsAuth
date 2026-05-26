@@ -854,13 +854,20 @@ async def _post_form(
     cfg   = interaction.client.cfg
 
     # Ensure we have a Member (with .roles); fall back to interaction.user if cache misses
-    actor = (guild.get_member(interaction.user.id) if guild else None) or interaction.user
+    actor = guild.get_member(interaction.user.id) if guild else None
+    actor_type = "Member" if actor else "User(no roles)"
+    if not actor:
+        actor = interaction.user
     server, err = _resolve_server(actor, cfg, server_override)
     if err:
         await interaction.followup.send(err, ephemeral=True)
         return
 
     is_ban = form_type in ("banform", "gbanform")
+
+    from db import get_server_channel
+    db_key = "banform" if is_ban else "proof"
+    raw_id_before = get_server_channel(guild.id, server, db_key)
 
     proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                 else get_proof_channel(guild, cfg, server))
@@ -876,15 +883,16 @@ async def _post_form(
 
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
-        from db import get_server_channel
-        db_key = "banform" if is_ban else "proof"
         raw_id = get_server_channel(guild.id, server, db_key)
         raw_ch = guild.get_channel(raw_id) if raw_id else None
         cat = discord.utils.get(guild.categories, name=str(server))
+        cat_channels = [c.name for c in cat.channels] if cat else []
         diag = (
-            f"`DB id={raw_id}` "
-            f"{'→ канал найден' if raw_ch else '→ канал NOT в кэше'}, "
-            f"категория {'найдена' if cat else 'НЕ найдена'}"
+            f"`actor={actor_type}` "
+            f"`DB before={raw_id_before}` `DB after={raw_id}` "
+            f"`guild.get_channel={'ok' if raw_ch else 'None'}` "
+            f"`cat={'найдена' if cat else 'НЕ найдена'}` "
+            f"`ch_in_cat={cat_channels}`"
         )
         await interaction.followup.send(
             f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
