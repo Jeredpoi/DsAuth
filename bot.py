@@ -73,9 +73,9 @@ async def on_ready():
             except Exception:
                 pass
     try:
-        await bot.user.edit(description="🛡️ Бот для управления модерацией\n📋 Формы наказаний • 🔐 Авторизация • 📊 Статистика")
-    except Exception:
-        pass
+        await bot.user.edit(bio="🛡️ Бот для управления модерацией\n📋 Формы наказаний • 🔐 Авторизация • 📊 Статистика")
+    except Exception as e:
+        print(f"   [profile] bio edit failed: {e}")
     await bot.tree.sync()
     print(f"✅ {bot.user} (ID: {bot.user.id})")
     print(f"   Версия: {_git_version()}")
