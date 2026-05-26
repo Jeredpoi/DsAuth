@@ -68,18 +68,11 @@ def _ch_by_id_or_name(
         ch = guild.get_channel(ch_id)
         if isinstance(ch, discord.TextChannel):
             return ch
-        # Channel deleted — clear stale ID so fallback works cleanly
-        guild_servers.pop(id_key, None)
-        save_config(cfg)
+        # get_channel returned None — could be cache miss, don't clear ID
     # fallback: find by category name
     category = discord.utils.get(guild.categories, name=str(server))
     if category:
-        ch = discord.utils.get(guild.text_channels, name=ch_name, category=category)
-        if ch:
-            # Save found ID for next time
-            guild_servers[id_key] = ch.id
-            save_config(cfg)
-        return ch
+        return discord.utils.get(guild.text_channels, name=ch_name, category=category)
     return None
 
 
@@ -520,14 +513,13 @@ class ServersCog(commands.Cog):
         from db import set_user_server, remove_user_server
 
         # 1. Sync DB from current roles for every member
+        # Only SET entries — never delete, removal is handled by on_member_update
         for member in guild.members:
             if member.bot:
                 continue
             server_roles = [r.name for r in member.roles if is_server_role(r.name)]
             if len(server_roles) == 1:
                 set_user_server(member.id, server_roles[0])
-            elif not server_roles:
-                remove_user_server(member.id)
 
         # 2. Ensure channels exist for all known servers
         cfg = self.bot.cfg
