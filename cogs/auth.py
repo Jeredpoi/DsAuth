@@ -536,6 +536,18 @@ class AuthCog(commands.Cog):
         except discord.Forbidden:
             pass
 
+        # Hide auth channel from the now-authorized member
+        guild_cfg_hide = get_guild_cfg(self.bot.cfg, guild.id)
+        auth_ch_id = guild_cfg_hide.get("auth_channel_id", 0)
+        auth_ch = guild.get_channel(auth_ch_id) if auth_ch_id else None
+        if auth_ch:
+            try:
+                await auth_ch.set_permissions(
+                    member, view_channel=False, reason="Авторизован — скрываем канал авт."
+                )
+            except discord.Forbidden:
+                pass
+
         msg = f"✅ {member.mention} авторизован как **{rank or '—'}**" + (f", сервер **{server_num}**" if server_num else "") + "."
         if role_error:
             msg += f"\n{role_error}\nПривязка сервера сохранена в БД — /proof будет работать, но выдайте роль **{server_num}** вручную."
@@ -722,6 +734,8 @@ class AuthCog(commands.Cog):
             )
 
         auth_channel = discord.utils.get(guild.text_channels, name="авторизация")
+        team_role_id_setup = guild_cfg.get("team_role_id", 0)
+        team_role_setup = guild.get_role(team_role_id_setup) if team_role_id_setup else None
         if not auth_channel:
             ch_overwrites = {
                 everyone: discord.PermissionOverwrite(
@@ -730,6 +744,8 @@ class AuthCog(commands.Cog):
                 guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
                 unverified: discord.PermissionOverwrite(view_channel=True),
             }
+            if team_role_setup:
+                ch_overwrites[team_role_setup] = discord.PermissionOverwrite(view_channel=False)
             auth_channel = await guild.create_text_channel(
                 name="авторизация",
                 category=category,
@@ -737,6 +753,16 @@ class AuthCog(commands.Cog):
                 topic="Нажмите кнопку для подачи заявки на авторизацию",
                 reason="Канал авторизации",
             )
+        elif team_role_setup:
+            # Ensure team_role is denied even on existing channel
+            ow = auth_channel.overwrites_for(team_role_setup)
+            if ow.view_channel is not False:
+                try:
+                    await auth_channel.set_permissions(
+                        team_role_setup, view_channel=False, reason="Скрыть канал авт. от авторизованных"
+                    )
+                except discord.Forbidden:
+                    pass
 
         # Fallback review channel (applications now go to per-server categories via 📋-заявки-авт)
         mgmt_roles = [r for r in guild.roles
