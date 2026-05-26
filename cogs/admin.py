@@ -547,5 +547,61 @@ class AdminCog(commands.Cog):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
+    @_ADMIN_PERM
+    @app_commands.command(name="botdebug", description="Отладка: состояние каналов и БД для участника")
+    @app_commands.describe(member="Участник (по умолчанию — вы)")
+    async def botdebug_cmd(self, interaction: discord.Interaction, member: discord.Member | None = None):
+        if not self._is_owner(interaction) and not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("❌ Только для владельца.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        target = member or interaction.user
+        guild  = interaction.guild
+        cfg    = self.bot.cfg
+
+        from cogs.servers import is_server_role, get_proof_channel, get_banform_channel, get_log_channel
+        from db import get_user_server
+
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        servers_cfg = guild_cfg.get("servers", {})
+
+        # Roles
+        role_servers = [r.name for r in target.roles if is_server_role(r.name)]
+        db_server    = get_user_server(target.id)
+
+        lines = [f"**🔍 Отладка для {target.mention}**\n"]
+
+        lines.append(f"**Серверные роли:** {', '.join(role_servers) or '—'}")
+        lines.append(f"**Сервер в БД:** {db_server or '—'}")
+
+        servers_to_check = list(dict.fromkeys(role_servers + ([db_server] if db_server else [])))
+
+        for srv in servers_to_check:
+            sc = servers_cfg.get(srv, {})
+            lines.append(f"\n**── Сервер {srv} ──**")
+
+            for key, label, getter in [
+                ("proof",   "📋 Наказания", get_proof_channel),
+                ("banform", "⚖️ Баны",       get_banform_channel),
+                ("logs",    "📊 Логи",        get_log_channel),
+            ]:
+                saved_id = sc.get(key, 0)
+                ch = getter(guild, cfg, srv)
+                if ch:
+                    status = f"✅ {ch.mention}"
+                elif saved_id:
+                    status = f"❌ ID `{saved_id}` — канал не найден"
+                else:
+                    status = "❌ Не привязан"
+                lines.append(f"{label}: {status}")
+
+        # Config keys for this guild
+        lines.append(f"\n**Ключи конфига:** {', '.join(servers_cfg.keys()) or '—'}")
+        lines.append(f"**Пинг бота:** {round(self.bot.latency * 1000)} мс")
+
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCog(bot))

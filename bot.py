@@ -1,5 +1,6 @@
 import asyncio
 import os
+import traceback
 
 import discord
 from discord.ext import commands
@@ -48,10 +49,41 @@ async def on_ready():
     print("   Используйте !sync на сервере для мгновенной синхронизации команд.")
 
 
+async def _send_error_to_monitoring(title: str, error_text: str):
+    """Send error report to the monitoring channel in every guild."""
+    from helpers import get_guild_cfg
+    for guild in bot.guilds:
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        ch_id = guild_cfg.get("monitoring", {}).get("🔔-авторизации", 0)
+        ch = guild.get_channel(ch_id) if ch_id else None
+        if not ch:
+            from cogs.servers import MONITORING_CATEGORY
+            cat = discord.utils.get(guild.categories, name=MONITORING_CATEGORY)
+            if cat:
+                ch = discord.utils.get(guild.text_channels, name="🔔-авторизации", category=cat)
+        if not ch:
+            continue
+        embed = discord.Embed(
+            title=f"🚨 {title}",
+            description=f"```\n{error_text[:3900]}\n```",
+            color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        try:
+            await ch.send(embed=embed)
+        except Exception:
+            pass
+
+
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    import traceback
-    traceback.print_exc()
+    tb = traceback.format_exc()
+    print(tb)
+    cmd = getattr(interaction.command, "name", "unknown")
+    await _send_error_to_monitoring(
+        f"Ошибка команды `/{cmd}`",
+        f"Пользователь: {interaction.user} ({interaction.user.id})\n{tb}",
+    )
     msg = f"❌ Произошла ошибка: `{error}`"
     try:
         if interaction.response.is_done():
@@ -60,6 +92,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
             await interaction.response.send_message(msg, ephemeral=True)
     except Exception:
         pass
+
+
+@bot.event
+async def on_error(event: str, *args, **kwargs):
+    tb = traceback.format_exc()
+    print(tb)
+    await _send_error_to_monitoring(f"Ошибка события `{event}`", tb)
 
 
 keep_alive()

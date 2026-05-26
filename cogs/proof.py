@@ -1119,7 +1119,7 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Не удалось определить сервер.", ephemeral=True)
             return
 
-        cutoff = discord.utils.utcnow() - __import__("datetime").timedelta(days=30)
+        cutoff = discord.utils.utcnow() - timedelta(days=30)
         results: list[tuple[str, discord.Message]] = []  # (server, message)
 
         for srv in servers_to_scan:
