@@ -418,6 +418,70 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
 
 # ─── Delete confirmation view ─────────────────────────────────────────────────
 
+class ResetServerView(discord.ui.View):
+    def __init__(self, server: str, cfg: dict, bot):
+        super().__init__(timeout=30)
+        self.server = server
+        self.cfg = cfg
+        self.bot = bot
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="Сбросить и пересоздать", style=discord.ButtonStyle.danger, emoji="♻️")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        server = self.server
+
+        # 1. Delete all channels in the category
+        category = discord.utils.get(guild.categories, name=server)
+        deleted = failed = 0
+        if category:
+            for ch in list(category.channels):
+                try:
+                    await ch.delete(reason=f"reset-server: {server}")
+                    deleted += 1
+                except (discord.Forbidden, discord.HTTPException):
+                    failed += 1
+            try:
+                await category.delete(reason=f"reset-server: {server}")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        # 2. Clear all DB channel IDs for this server
+        from db import clear_server_channel
+        for key in ("chat", "proof", "banform", "leadership", "logs", "auth", "category_id"):
+            clear_server_channel(guild.id, server, key)
+
+        # 3. Recreate everything
+        try:
+            await ensure_server_channels(guild, server, self.cfg)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
+            self.stop()
+            return
+
+        self.stop()
+        msg = f"♻️ Сервер **{server}** сброшен и пересоздан (удалено каналов: {deleted}"
+        if failed:
+            msg += f", не удалось удалить: {failed}"
+        msg += ")."
+        await interaction.followup.send(msg, ephemeral=True)
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="Отменено.", view=None)
+
+
 class DeleteCategoryView(discord.ui.View):
     def __init__(self, server: str, cfg: dict):
         super().__init__(timeout=30)
@@ -738,6 +802,28 @@ class ServersCog(commands.Cog):
             await interaction.followup.send(f"🗑️ Удалено дублей: **{deleted}** в категории **{server}**.", ephemeral=True)
         else:
             await interaction.followup.send(f"✅ Дублей в категории **{server}** не найдено.", ephemeral=True)
+
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.command(name="resetserver", description="Удалить все каналы сервера и пересоздать их заново")
+    @app_commands.describe(server="Номер сервера (1–90)")
+    async def resetserver_cmd(self, interaction: discord.Interaction, server: str):
+        if not self._is_owner(interaction):
+            await interaction.response.send_message("❌ Только для владельца сервера.", ephemeral=True)
+            return
+        if not (server.isdigit() and 1 <= int(server) <= 90):
+            await interaction.response.send_message("❌ Укажите число от 1 до 90.", ephemeral=True)
+            return
+
+        category = discord.utils.get(interaction.guild.categories, name=server)
+        ch_count = len(category.channels) if category else 0
+        view = ResetServerView(server, self.bot.cfg, self.bot)
+        await interaction.response.send_message(
+            f"⚠️ Все каналы категории **{server}** ({ch_count} шт.) будут **удалены** и пересозданы с нуля.\n"
+            f"Все сохранённые ID в базе данных будут сброшены. Продолжить?",
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
 
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="listmods", description="Список модераторов по серверам")
