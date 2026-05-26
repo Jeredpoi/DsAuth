@@ -901,14 +901,15 @@ async def _post_form(
                        else ("role" if any(r.name == server for r in getattr(actor, "roles", []))
                              else "db"))
         me = guild.me
+        bot_id = interaction.client.user.id if interaction.client.user else "?"
         if me is None:
-            bot_perm_str = "`bot=guild.me is None ❌`"
+            bot_perm_str = f"`bot=guild.me is None ❌ (bot_id={bot_id})`"
         elif me.guild_permissions.administrator:
             bot_perm_str = "`bot=ADMINISTRATOR ✓`"
         else:
             p = me.guild_permissions
             bot_perm_str = (
-                f"`bot manage_channels={'✓' if p.manage_channels else '✗'}` "
+                f"`bot(id={bot_id}) manage_channels={'✓' if p.manage_channels else '✗'}` "
                 f"`manage_roles={'✓' if p.manage_roles else '✗'}` "
                 f"`send_messages={'✓' if p.send_messages else '✗'}`"
             )
