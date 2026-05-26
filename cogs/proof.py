@@ -889,19 +889,35 @@ async def _post_form(
 
     if not proof_ch:
         ch_label = "банов" if is_ban else "наказаний"
-        raw_id = get_server_channel(guild.id, server, db_key)
-        raw_ch = guild.get_channel(raw_id) if raw_id else None
-        cat = discord.utils.get(guild.categories, name=str(server))
-        cat_channels = [c.name for c in cat.channels] if cat else []
-        actor_has_roles = bool(getattr(actor, "roles", None))
-        diag = (
-            f"`actor={'Member' if actor_has_roles else 'User(no roles)'}` "
-            f"`DB before={raw_id_before}` `DB after={raw_id}` "
-            f"`guild.get_channel={'ok' if raw_ch else 'None'}` "
-            f"`cat={'найдена' if cat else 'НЕ найдена'}` "
-            f"`ch_in_cat={cat_channels}`"
-            + (f" `ensure_error={ensure_error}`" if ensure_error else "")
-        )
+        from db import get_all_server_channels
+        raw_id   = get_server_channel(guild.id, server, db_key)
+        raw_ch   = guild.get_channel(raw_id) if raw_id else None
+        cat      = discord.utils.get(guild.categories, name=str(server))
+        cat_id_db = get_server_channel(guild.id, server, "category_id")
+        cat_by_id = guild.get_channel(cat_id_db) if cat_id_db else None
+        all_db   = get_all_server_channels(guild.id, server)
+        actor_roles = [r.name for r in getattr(actor, "roles", []) if r.name != "@everyone"]
+        bot_perms   = guild.me.guild_permissions if guild.me else None
+        server_src  = ("override" if server_override
+                       else ("role" if any(r.name == server for r in getattr(actor, "roles", []))
+                             else "db"))
+        diag_lines = [
+            f"`сервер={server}` `src={server_src}` `форма={form_type}`",
+            f"`actor={'Member' if getattr(actor, 'roles', None) else 'User'}` "
+            f"`roles={actor_roles[:5]}`",
+            f"`DB[{db_key}] before={raw_id_before} after={raw_id}` "
+            f"`guild.get_channel={'ok' if raw_ch else 'None'}`",
+            f"`cat_by_name={'найдена id='+str(cat.id) if cat else 'НЕ найдена'}` "
+            f"`cat_by_db_id={'найдена' if isinstance(cat_by_id, discord.CategoryChannel) else 'None'} ({cat_id_db})`",
+            f"`ch_in_cat={[c.name for c in cat.channels] if cat else []}`",
+            f"`all_db={dict(all_db)}`",
+            f"`bot manage_channels={'✓' if bot_perms and bot_perms.manage_channels else '✗'}` "
+            f"`manage_roles={'✓' if bot_perms and bot_perms.manage_roles else '✗'}` "
+            f"`send_messages={'✓' if bot_perms and bot_perms.send_messages else '✗'}`",
+        ]
+        if ensure_error:
+            diag_lines.append(f"`ensure_error={ensure_error}`")
+        diag = "\n-# ".join(diag_lines)
         await interaction.followup.send(
             f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
             f"Привяжите существующий канал: `/linkserver server:{server} "
