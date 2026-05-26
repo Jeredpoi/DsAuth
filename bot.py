@@ -53,12 +53,13 @@ def _git_version() -> str:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
         ).decode().strip()
-        branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], stderr=subprocess.DEVNULL
+        date = subprocess.check_output(
+            ["git", "log", "-1", "--format=%cd", "--date=format:%d.%m.%Y %H:%M"],
+            stderr=subprocess.DEVNULL
         ).decode().strip()
-        return f"{branch}@{commit}"
+        return f"{date}  (коммит {commit})"
     except Exception:
-        return "unknown"
+        return "неизвестно"
 
 
 @bot.event
