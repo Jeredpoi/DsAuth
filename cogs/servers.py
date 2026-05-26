@@ -303,8 +303,9 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         cat_ow = {
             everyone: discord.PermissionOverwrite(view_channel=False),
             server_role: discord.PermissionOverwrite(view_channel=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         }
+        if guild.me:
+            cat_ow[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
         category = await guild.create_category(name=cat_name, overwrites=cat_ow)
 
     from db import get_server_channel, set_server_channel

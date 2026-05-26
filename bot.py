@@ -22,7 +22,13 @@ intents.guilds = True
 intents.message_content = True
 
 db.init_db()
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, proxy=PROXY)
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned,
+    intents=intents,
+    proxy=PROXY,
+    member_cache_flags=discord.MemberCacheFlags.all(),
+    chunk_guilds_at_startup=True,
+)
 cfg = load_config()
 db.migrate_from_json(cfg)   # переносит user_servers и stats.json → SQLite (один раз)
 bot.cfg = cfg
@@ -43,6 +49,13 @@ async def main():
 
 @bot.event
 async def on_ready():
+    # Ensure member cache is fully populated so guild.me is never None
+    for guild in bot.guilds:
+        if not guild.chunked:
+            try:
+                await guild.chunk()
+            except Exception:
+                pass
     await bot.tree.sync()
     print(f"✅ {bot.user} (ID: {bot.user.id})")
     print(f"   Серверов: {len(bot.guilds)}")
