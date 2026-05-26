@@ -20,6 +20,9 @@ def _conn() -> sqlite3.Connection:
 def init_db():
     with _conn() as c:
         c.execute("PRAGMA journal_mode=WAL").fetchone()
+        # Merge any leftover WAL into the main DB on every startup so the
+        # .db file is always consistent even if .shm/.wal were deleted.
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         c.executescript("""
         CREATE TABLE IF NOT EXISTS user_servers (
             user_id   TEXT PRIMARY KEY,
