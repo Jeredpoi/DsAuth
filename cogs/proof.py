@@ -881,8 +881,8 @@ async def _post_form(
             await ensure_server_channels(guild, server, cfg)
             proof_ch = (get_banform_channel(guild, cfg, server) if is_ban
                         else get_proof_channel(guild, cfg, server))
-        except discord.Forbidden:
-            ensure_error = "нет прав на создание каналов (Forbidden)"
+        except discord.Forbidden as e:
+            ensure_error = f"Forbidden: {e.text!r} code={e.code} status={e.status}"
         except Exception as e:
             ensure_error = str(e)[:120]
             import traceback; traceback.print_exc()

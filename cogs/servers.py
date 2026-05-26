@@ -313,7 +313,8 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         ow = _safe_ow(overwrites)
         try:
             return await guild.create_text_channel(name=name, category=cat, overwrites=ow, **kw)
-        except discord.Forbidden:
+        except discord.Forbidden as fe:
+            print(f"[ensure] create_text_channel with overwrites Forbidden: {fe.text!r} code={fe.code}")
             return await guild.create_text_channel(name=name, category=cat, **kw)
 
     cat_name = str(server)
@@ -326,7 +327,8 @@ async def _ensure_server_channels_locked(guild: discord.Guild, server: str, cfg:
         })
         try:
             category = await guild.create_category(name=cat_name, overwrites=cat_ow)
-        except discord.Forbidden:
+        except discord.Forbidden as fe:
+            print(f"[ensure] create_category with overwrites Forbidden: {fe.text!r} code={fe.code}")
             category = await guild.create_category(name=cat_name)
 
     from db import get_server_channel, set_server_channel
