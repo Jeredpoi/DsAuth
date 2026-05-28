@@ -383,7 +383,7 @@ class AdminCog(commands.Cog):
 
         # ── 2. Информационная категория ────────────────────────────────────
         async def _setup_info():
-            from cogs.info import _build_rules_view, _build_commands_embed, INFO_CATEGORY
+            from cogs.info import _build_rules_view, _build_commands_view, INFO_CATEGORY
 
             everyone  = guild.default_role
             read_only = discord.PermissionOverwrite(view_channel=True, send_messages=False)
@@ -430,7 +430,7 @@ class AdminCog(commands.Cog):
                     topic="Список команд бота",
                     overwrites={everyone: read_only, guild.me: bot_ow},
                 )
-                await ch_cmd.send(embed=_build_commands_embed())
+                await ch_cmd.send(view=_build_commands_view())
             ids["commands_channel_id"] = ch_cmd.id
 
             save_config(cfg)

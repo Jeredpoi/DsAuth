@@ -18,72 +18,98 @@ SERVER_RULES: list[tuple[str, str, str]] = [
      "Изучите регламент выдачи наказаний. Формы заполняются строго по установленному шаблону."),
     ("🔐", "Конфиденциальность",
      "Разглашение внутренних данных, обсуждений и решений команды третьим лицам запрещено."),
-    ("⚡", "Активность и ответственность",
-     "Своевременно обрабатывайте заявки и выдавайте наказания. При длительном отсутствии уведомите руководство."),
+    ("⚡", "Активность",
+     "Своевременно обрабатывайте заявки. При длительном отсутствии уведомите руководство заранее."),
     ("📢", "Порядок в каналах",
-     "Придерживайтесь тематики каналов. Флуд, спам и оффтоп недопустимы."),
-    ("🛡️", "Честность и беспристрастность",
+     "Флуд, спам и оффтоп недопустимы. Придерживайтесь тематики каждого канала."),
+    ("🛡️", "Честность",
      "Злоупотребление полномочиями и фальсификация доказательств влекут немедленное исключение."),
     ("🚫", "Запрет дискредитации",
      "Публичная критика команды, руководства или проекта в любых каналах недопустима."),
-    ("📱", "Связь и отчётность",
+    ("📱", "Связь с руководством",
      "Отвечайте на сообщения руководства в течение 24 часов. Систематическое игнорирование = исключение."),
+    ("🎯", "Соответствие должности",
+     "Выполняйте обязанности строго в рамках своего звания и полученных полномочий."),
+    ("🔇", "Субординация",
+     "Соблюдайте субординацию. Решения вышестоящих исполняются без промедления."),
+    ("📸", "Качество доказательств",
+     "Принимаются только чёткие скриншоты или видеозаписи. Сомнительные материалы недействительны."),
+    ("⏰", "Сроки оформления",
+     "Формы наказаний оформляются не позднее 30 минут с момента фиксации нарушения."),
+    ("🎮", "Поведение на сервере",
+     "Поведение модератора в игре должно соответствовать статусу. Нарушения правил в игре фиксируются."),
+    ("🔄", "Передача дел",
+     "При уходе обязательно передайте незакрытые дела и доступы руководству или преемнику."),
+    ("📊", "Выполнение нормы",
+     "Систематическое невыполнение нормы по формам влечёт предупреждение и понижение."),
+    ("🚨", "Сообщение о нарушениях",
+     "Любое нарушение со стороны коллеги обязательно сообщается руководству лично."),
+    ("💬", "Культура общения",
+     "Общайтесь без мата и агрессии — как внутри команды, так и с игроками проекта."),
+    ("🔒", "Использование инструментов",
+     "Командные инструменты (бот, каналы, роли) используются исключительно по назначению."),
+    ("⚖️", "Равенство",
+     "Правила одинаковы для всех участников команды, независимо от звания и выслуги лет."),
+    ("📝", "Оформление наказаний",
+     "Все наказания фиксируются через бота. Ручные записи без формы считаются недействительными."),
 ]
+
 
 def _build_rules_view() -> discord.ui.LayoutView:
     items: list = [
         discord.ui.TextDisplay(
             "## 📖 Правила команды модерации\n"
-            "Ознакомьтесь с правилами. Незнание не освобождает от ответственности."
+            "-# Незнание правил не освобождает от ответственности за их нарушение."
         ),
         discord.ui.Separator(),
     ]
     for i, (emoji, title, desc) in enumerate(SERVER_RULES, 1):
-        items.append(discord.ui.TextDisplay(f"**{i}. {emoji} {title}**\n{desc}"))
-        items.append(discord.ui.Separator())
+        items.append(discord.ui.TextDisplay(f"**{i}. {emoji} {title}**\n-# {desc}"))
+        if i < len(SERVER_RULES):
+            items.append(discord.ui.Separator())
+    items.append(discord.ui.Separator())
     items.append(discord.ui.TextDisplay(
-        "⚠️ **Нарушение правил влечёт взыскание или исключение из команды.**"
+        "### ⚠️ Нарушение правил влечёт взыскание или исключение из команды."
     ))
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*items, accent_color=0x5865F2))
     return view
 
 
-def _build_commands_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="🤖 Команды бота",
-        description="Все slash-команды доступные участникам команды модерации.",
-        color=ANNOUNCE_COLOR,
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(
-        name="📋 Формы наказаний",
-        value=(
+def _build_commands_view() -> discord.ui.LayoutView:
+    items: list = [
+        discord.ui.TextDisplay(
+            "## 🤖 Команды бота\n"
+            "-# Все slash-команды доступны участникам команды модерации."
+        ),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            "**📋 Формы наказаний**\n"
             "`/proof` — форма обычного наказания\n"
             "`/banform` — форма бана (7–15 дней)\n"
             "`/gbanform` — форма глобального бана\n"
             "`/activforms` — незакрытые формы банов"
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📊 Статистика и информация",
-        value=(
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            "**📊 Статистика**\n"
             "`/stats` — ваша статистика форм\n"
             "`/listmods` — список модераторов по серверам"
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="👥 Авторизация",
-        value=(
-            "`/promote` — изменить звание модератора (ЗГМ+)\n"
-            "`/dismiss` — исключить модератора из команды (ЗГМ+)"
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            "**👥 Управление составом**\n"
+            "`/promote` — изменить звание модератора `(ЗГМ+)`\n"
+            "`/dismiss` — исключить модератора из команды `(ЗГМ+)`"
         ),
-        inline=False,
-    )
-    embed.set_footer(text="Параметры команд смотрите в описании при вводе /")
-    return embed
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            "-# Параметры команд смотрите в подсказке при вводе /"
+        ),
+    ]
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_color=0x2ECC71))
+    return view
 
 
 # ─── Announce modal ───────────────────────────────────────────────────────────
@@ -108,14 +134,20 @@ class AnnounceModal(discord.ui.Modal, title="Новое объявление"):
         self.announce_channel = announce_channel
 
     async def on_submit(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title=f"📢 {self.heading.value}",
-            description=self.body.value,
-            color=ANNOUNCE_COLOR,
-        )
-        embed.set_footer(text=f"Объявление от {interaction.user} • {discord.utils.utcnow().strftime('%d.%m.%Y %H:%M')} UTC")
+        ts = int(discord.utils.utcnow().timestamp())
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## 📢 {self.heading.value}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(self.body.value),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# {interaction.user.display_name} • <t:{ts}:f>"
+            ),
+            accent_color=ANNOUNCE_COLOR,
+        ))
         try:
-            await self.announce_channel.send(embed=embed)
+            await self.announce_channel.send(view=view)
             await interaction.response.send_message(
                 f"✅ Объявление опубликовано в {self.announce_channel.mention}.", ephemeral=True
             )
@@ -208,9 +240,9 @@ class InfoCog(commands.Cog):
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 existing_cmd = None
         if existing_cmd:
-            await existing_cmd.edit(embed=_build_commands_embed())
+            await existing_cmd.edit(view=_build_commands_view())
         else:
-            msg = await ch_cmd.send(embed=_build_commands_embed())
+            msg = await ch_cmd.send(view=_build_commands_view())
             ids["commands_msg_id"] = msg.id
         ids["commands_channel_id"] = ch_cmd.id
 

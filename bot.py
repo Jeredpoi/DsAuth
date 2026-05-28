@@ -74,15 +74,19 @@ async def on_ready():
                 await guild.chunk()
             except Exception:
                 pass
-    try:
-        await bot.user.edit(bio="🛡️ Бот для управления модерацией\n📋 Формы наказаний • 🔐 Авторизация • 📊 Статистика")
-    except Exception as e:
-        print(f"   [profile] bio edit failed: {e}")
     await bot.tree.sync()
     print(f"✅ {bot.user} (ID: {bot.user.id})")
-    print(f"   Версия: {_git_version()}")
+    print(f"   Версия:   {_git_version()}")
     print(f"   Серверов: {len(bot.guilds)}")
-    print("   Используйте !sync на сервере для мгновенной синхронизации команд.")
+    print(f"   Пинг:     {round(bot.latency * 1000)} мс")
+    print("─" * 48)
+    print("   ℹ️  Описание профиля бота (About Me) задаётся")
+    print("      вручную в Discord Developer Portal:")
+    print("      discord.com/developers/applications → выбери бота → Bot → About Me")
+    print("   Рекомендуемый текст:")
+    print("      🛡️ Система управления модерацией Black Russia")
+    print("      📋 Формы наказаний  •  🔐 Авторизация  •  📊 Статистика")
+    print("─" * 48)
 
 
 async def _send_error_to_monitoring(title: str, error_text: str):
