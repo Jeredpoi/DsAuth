@@ -8,7 +8,6 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from helpers import load_config
-from keep_alive import keep_alive
 import db
 
 load_dotenv()
@@ -39,6 +38,9 @@ bot.owner_id_cfg = OWNER_ID
 
 async def main():
     async with bot:
+        from keep_alive import start_webserver, self_ping_loop
+        await start_webserver(bot)
+        asyncio.create_task(self_ping_loop())
         await bot.load_extension("cogs.proof")
         await bot.load_extension("cogs.admin")
         await bot.load_extension("cogs.auth")
@@ -135,5 +137,4 @@ async def on_error(event: str, *args, **kwargs):
     await _send_error_to_monitoring(f"Ошибка события `{event}`", tb)
 
 
-keep_alive()
 asyncio.run(main())

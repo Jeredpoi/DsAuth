@@ -57,11 +57,7 @@ class FormTemplateModal(discord.ui.Modal):
     template_input = discord.ui.TextInput(
         label="Шаблон формы",
         style=discord.TextStyle.paragraph,
-        placeholder=(
-            "Переменные: {moderatorNick} {userId} {userTag}\n"
-            "{ruleId} {ruleText} {punishment}\n"
-            "{dateIssued} {dateEnd} {evidence}"
-        ),
+        placeholder="{moderatorNick} {userId} {userTag} {ruleId} {punishment} {dateIssued} {dateEnd} {evidence}",
         max_length=1800,
         required=True,
     )
@@ -387,7 +383,7 @@ class AdminCog(commands.Cog):
 
         # ── 2. Информационная категория ────────────────────────────────────
         async def _setup_info():
-            from cogs.info import _build_rule_embeds, _build_commands_embed, INFO_CATEGORY
+            from cogs.info import _build_rules_view, _build_commands_embed, INFO_CATEGORY
 
             everyone  = guild.default_role
             read_only = discord.PermissionOverwrite(view_channel=True, send_messages=False)
@@ -412,8 +408,7 @@ class AdminCog(commands.Cog):
                     overwrites={everyone: read_only, guild.me: bot_ow},
                 )
                 await ch_rules.purge(limit=10)
-                for embed in _build_rule_embeds():
-                    await ch_rules.send(embed=embed)
+                await ch_rules.send(view=_build_rules_view())
             ids["rules_channel_id"] = ch_rules.id
 
             # Объявления

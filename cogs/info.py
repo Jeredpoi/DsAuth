@@ -11,62 +11,67 @@ ANNOUNCE_COLOR = 0x5865F2
 
 # ─── Embed builders ───────────────────────────────────────────────────────────
 
-SERVER_RULES: list[tuple[str, str]] = [
-    ("🚫", "Воздерживайтесь от оскорблений других участников"),
-    ("🔞", "Запрещён любой контент 18+"),
-    ("💬", "Не спамьте сообщениями и не флудьте"),
-    ("🤖", "Не пытайтесь нарушить работу бота"),
+SERVER_RULES: list[tuple[str, str, str]] = [
+    ("🤝", "Уважение к коллегам",
+     "Оскорбления, унижения и провокации в адрес участников команды недопустимы."),
+    ("📋", "Соблюдение регламента",
+     "Изучите регламент выдачи наказаний. Формы заполняются строго по установленному шаблону."),
+    ("🔐", "Конфиденциальность",
+     "Разглашение внутренних данных, обсуждений и решений команды третьим лицам запрещено."),
+    ("⚡", "Активность и ответственность",
+     "Своевременно обрабатывайте заявки и выдавайте наказания. При длительном отсутствии уведомите руководство."),
+    ("📢", "Порядок в каналах",
+     "Придерживайтесь тематики каналов. Флуд, спам и оффтоп недопустимы."),
+    ("🛡️", "Честность и беспристрастность",
+     "Злоупотребление полномочиями и фальсификация доказательств влекут немедленное исключение."),
+    ("🚫", "Запрет дискредитации",
+     "Публичная критика команды, руководства или проекта в любых каналах недопустима."),
+    ("📱", "Связь и отчётность",
+     "Отвечайте на сообщения руководства в течение 24 часов. Систематическое игнорирование = исключение."),
 ]
 
-def _build_rule_embeds() -> list[discord.Embed]:
-    embeds: list[discord.Embed] = []
-
-    header = discord.Embed(
-        title="📖 Правила сервера",
-        description=(
-            "Добро пожаловать на сервер команды модерации.\n"
-            "Пожалуйста, ознакомьтесь с правилами и соблюдайте их."
+def _build_rules_view() -> discord.ui.LayoutView:
+    items: list = [
+        discord.ui.TextDisplay(
+            "## 📖 Правила команды модерации\n"
+            "Ознакомьтесь с правилами. Незнание не освобождает от ответственности."
         ),
-        color=INFO_COLOR,
-        timestamp=discord.utils.utcnow(),
-    )
-    header.set_footer(text="Последнее обновление")
-    embeds.append(header)
-
-    for i, (emoji, text) in enumerate(SERVER_RULES, 1):
-        e = discord.Embed(
-            title=f"{emoji} Правило {i}",
-            description=f"> {text}",
-            color=INFO_COLOR,
-        )
-        embeds.append(e)
-
-    footer = discord.Embed(
-        description="⚠️ **Нарушение правил влечёт исключение с сервера.**",
-        color=0xED4245,
-    )
-    embeds.append(footer)
-    return embeds
+        discord.ui.Separator(),
+    ]
+    for i, (emoji, title, desc) in enumerate(SERVER_RULES, 1):
+        items.append(discord.ui.TextDisplay(f"**{i}. {emoji} {title}**\n{desc}"))
+        items.append(discord.ui.Separator())
+    items.append(discord.ui.TextDisplay(
+        "⚠️ **Нарушение правил влечёт взыскание или исключение из команды.**"
+    ))
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_color=0x5865F2))
+    return view
 
 
 def _build_commands_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🤖 Команды бота",
-        description="Все slash-команды, доступные участникам команды.",
+        description="Все slash-команды доступные участникам команды модерации.",
         color=ANNOUNCE_COLOR,
+        timestamp=discord.utils.utcnow(),
     )
     embed.add_field(
         name="📋 Формы наказаний",
         value=(
             "`/proof` — форма обычного наказания\n"
             "`/banform` — форма бана (7–15 дней)\n"
-            "`/gbanform` — форма глобального бана"
+            "`/gbanform` — форма глобального бана\n"
+            "`/activforms` — незакрытые формы банов"
         ),
         inline=False,
     )
     embed.add_field(
-        name="📊 Статистика",
-        value="`/stats` — ваша статистика форм",
+        name="📊 Статистика и информация",
+        value=(
+            "`/stats` — ваша статистика форм\n"
+            "`/listmods` — список модераторов по серверам"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -75,11 +80,6 @@ def _build_commands_embed() -> discord.Embed:
             "`/promote` — изменить звание модератора (ЗГМ+)\n"
             "`/dismiss` — исключить модератора из команды (ЗГМ+)"
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🛠️ Серверы",
-        value="`/listmods` — список модераторов по серверам",
         inline=False,
     )
     embed.set_footer(text="Параметры команд смотрите в описании при вводе /")
@@ -178,8 +178,7 @@ class InfoCog(commands.Cog):
                 overwrites={everyone: read_only, guild.me: bot_ow},
             )
         await ch_rules.purge(limit=50)
-        for embed in _build_rule_embeds():
-            await ch_rules.send(embed=embed)
+        await ch_rules.send(view=_build_rules_view())
         ids["rules_channel_id"] = ch_rules.id
 
         # 📢 Объявления
@@ -251,8 +250,7 @@ class InfoCog(commands.Cog):
             return
 
         await ch.purge(limit=50)
-        for embed in _build_rule_embeds():
-            await ch.send(embed=embed)
+        await ch.send(view=_build_rules_view())
 
         await interaction.followup.send(f"✅ Правила обновлены в {ch.mention}.", ephemeral=True)
 

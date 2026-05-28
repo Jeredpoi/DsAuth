@@ -541,73 +541,6 @@ async def _log_form_deletion(
         pass
 
 
-# ─── Leader management panel (КМ+, no time restriction) ─────────────────────
-
-class LeaderManageView(discord.ui.View):
-    """Shown to leadership (КМ+) for any form — delete without time restriction."""
-
-    def __init__(self, proof_message: discord.Message):
-        super().__init__(timeout=None)
-        self.proof_message = proof_message
-
-    @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
-    async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Extract log data before deletion while components are guaranteed accessible
-        log_data = _extract_v2_data(self.proof_message)
-        try:
-            await self.proof_message.delete()
-        except (discord.Forbidden, discord.HTTPException):
-            await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
-            return
-        await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, log_data, by_leader=True, proof_message=self.proof_message)
-
-
-# ─── Owner management panel ───────────────────────────────────────────────────
-
-class OwnerManageView(discord.ui.View):
-    """Ephemeral panel shown to the form's author."""
-
-    def __init__(self, proof_message: discord.Message):
-        super().__init__(timeout=None)
-        self.proof_message = proof_message
-
-    @discord.ui.button(label="📎 Добавить доказательство", style=discord.ButtonStyle.primary)
-    async def add_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AddEvidenceModal(self.proof_message))
-
-    @discord.ui.button(label="📷 Как добавить фото", style=discord.ButtonStyle.secondary)
-    async def photo_help(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "**Как добавить фото как доказательство:**\n"
-            "1. Загрузи фото в любой канал Discord (можно в ЛС себе)\n"
-            "2. Нажми ПКМ на фото → **Копировать ссылку на медиа**\n"
-            "3. Нажми **📎 Добавить доказательство** и вставь ссылку",
-            ephemeral=True,
-        )
-
-    @discord.ui.button(label="🗑️ Удалить форму", style=discord.ButtonStyle.danger)
-    async def delete_form(self, interaction: discord.Interaction, button: discord.ui.Button):
-        is_leader = get_member_rank_level(interaction.user) >= FORM_LEADER_MIN_LEVEL
-        age_sec = (discord.utils.utcnow() - self.proof_message.created_at).total_seconds()
-        if age_sec > FORM_DELETE_AUTHOR_WINDOW and not is_leader:
-            await interaction.response.send_message(
-                "❌ Форму можно удалить только в первые **5 минут** после отправки.\n"
-                "Для удаления обратитесь к руководству (КМ+).",
-                ephemeral=True,
-            )
-            return
-        # Extract log data before deletion
-        log_data = _extract_v2_data(self.proof_message)
-        try:
-            await self.proof_message.delete()
-        except (discord.Forbidden, discord.HTTPException):
-            await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
-            return
-        await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
-        await _log_form_deletion(interaction, log_data, by_leader=is_leader, proof_message=self.proof_message)
-
-
 # ─── Button callbacks ─────────────────────────────────────────────────────────
 
 def _wire_callbacks(view: discord.ui.LayoutView) -> None:
@@ -635,18 +568,29 @@ async def _manage_callback(interaction: discord.Interaction):
         )
         return
 
-    # Authors get OwnerManageView (add evidence + delete); leaders who aren't the
-    # author get LeaderManageView (delete without the 5-min window).
-    # When the author is also a leader, OwnerManageView.delete_form bypasses the
-    # time restriction via the is_leader check below.
-    if is_author:
-        panel = OwnerManageView(interaction.message)
-        label = "**⚙️ Управление формой:**"
-    else:
-        panel = LeaderManageView(interaction.message)
-        label = "**⚙️ Управление формой (руководство):**"
+    ch_id  = interaction.message.channel.id
+    msg_id = interaction.message.id
 
-    await interaction.response.send_message(label, view=panel, ephemeral=True)
+    view = discord.ui.View(timeout=1800)  # 30 min
+    if is_author:
+        view.add_item(discord.ui.Button(
+            label="📎 Добавить доказательство",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"manage:evidence:{ch_id}:{msg_id}",
+        ))
+        view.add_item(discord.ui.Button(
+            label="📷 Как добавить фото",
+            style=discord.ButtonStyle.secondary,
+            custom_id="manage:photo_help",
+        ))
+    view.add_item(discord.ui.Button(
+        label="🗑️ Удалить форму",
+        style=discord.ButtonStyle.danger,
+        custom_id=f"manage:delete:{ch_id}:{msg_id}",
+    ))
+
+    label = "**⚙️ Управление формой:**" if is_author else "**⚙️ Управление формой (руководство):**"
+    await interaction.response.send_message(label, view=view, ephemeral=True)
 
 
 async def _evidence_callback(interaction: discord.Interaction):
@@ -987,7 +931,7 @@ async def _post_form(
         # Channel was deleted — clear stale ID so next call recreates it
         id_key = "banform" if is_ban else "proof"
         from db import clear_server_channel
-        clear_server_channel(guild.id, server, id_key)
+        clear_server_channel(target_guild.id, server, id_key)
         await interaction.followup.send(
             f"❌ Канал был удалён (сервер **{server}**). Попробуйте снова — бот пересоздаст его.",
             ephemeral=True,
@@ -1086,6 +1030,83 @@ class ProofCog(commands.Cog):
     @reminder_loop.before_loop
     async def before_reminder(self):
         await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        custom_id: str = interaction.data.get("custom_id", "")
+        if not custom_id.startswith("manage:"):
+            return
+
+        parts = custom_id.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+
+        if action == "photo_help":
+            await interaction.response.send_message(
+                "**Как добавить фото как доказательство:**\n"
+                "1. Загрузи фото в любой канал Discord (можно в ЛС себе)\n"
+                "2. Нажми ПКМ на фото → **Копировать ссылку на медиа**\n"
+                "3. Нажми **📎 Добавить доказательство** и вставь ссылку",
+                ephemeral=True,
+            )
+            return
+
+        if action not in ("evidence", "delete") or len(parts) < 4:
+            return
+        if not parts[2].isdigit() or not parts[3].isdigit():
+            return
+
+        ch_id  = int(parts[2])
+        msg_id = int(parts[3])
+
+        ch = interaction.client.get_channel(ch_id)
+        if not ch:
+            await interaction.response.send_message("❌ Канал не найден.", ephemeral=True)
+            return
+
+        try:
+            proof_msg = await ch.fetch_message(msg_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "❌ Форма не найдена (возможно, уже удалена).", ephemeral=True
+            )
+            return
+
+        if action == "evidence":
+            await interaction.response.send_modal(AddEvidenceModal(proof_msg))
+
+        elif action == "delete":
+            data = _extract_v2_data(proof_msg)
+            mod_id = data.get("mod_id", 0)
+            is_author = interaction.user.id == mod_id
+            is_leader = get_member_rank_level(interaction.user) >= FORM_LEADER_MIN_LEVEL
+
+            if not is_author and not is_leader:
+                await interaction.response.send_message(
+                    "❌ Только автор формы или руководство (КМ+) могут удалить форму.", ephemeral=True
+                )
+                return
+
+            age_sec = (discord.utils.utcnow() - proof_msg.created_at).total_seconds()
+            if not is_leader and age_sec > FORM_DELETE_AUTHOR_WINDOW:
+                await interaction.response.send_message(
+                    "❌ Форму можно удалить только в первые **5 минут** после отправки.\n"
+                    "Для удаления обратитесь к руководству (КМ+).",
+                    ephemeral=True,
+                )
+                return
+
+            log_data = _extract_v2_data(proof_msg)
+            try:
+                await proof_msg.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.response.send_message("❌ Не удалось удалить форму.", ephemeral=True)
+                return
+            await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
+            await _log_form_deletion(
+                interaction, log_data, by_leader=is_leader, proof_message=proof_msg
+            )
 
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="proof", description="Отправить доказательство нарушения")
