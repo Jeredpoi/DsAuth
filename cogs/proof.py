@@ -701,10 +701,18 @@ def _wire_callbacks(view: discord.ui.LayoutView) -> None:
 
 
 async def _manage_callback(interaction: discord.Interaction):
-    data   = _extract_v2_data(interaction.message)
-    mod_id = data.get("mod_id", 0)
+    data      = _extract_v2_data(interaction.message)
+    mod_id    = data.get("mod_id", 0)
+    is_author = interaction.user.id == mod_id
 
-    if interaction.user.id != mod_id:
+    # Check if this user has enough rank to approve this form type
+    punishment = data.get("punishment", "")
+    title      = data.get("title", "")
+    form_type  = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
+    min_level  = APPROVE_MIN_RANK.get(form_type, 2)
+    is_approver = get_member_rank_level(interaction.user) >= min_level
+
+    if not is_author and not is_approver:
         await interaction.response.send_message(
             "❌ Управлять формой может только её **автор**.", ephemeral=True
         )
@@ -712,40 +720,41 @@ async def _manage_callback(interaction: discord.Interaction):
 
     ch_id  = interaction.message.channel.id
     msg_id = interaction.message.id
-    has_evidence = bool(_extract_evidence_urls(interaction.message.components))
 
     view = discord.ui.View(timeout=1800)  # 30 min
-    view.add_item(discord.ui.Button(
-        label="📎 Добавить доказательство",
-        style=discord.ButtonStyle.primary,
-        custom_id=f"manage:evidence:{ch_id}:{msg_id}",
-        row=0,
-    ))
-    if has_evidence:
+    if is_author:
+        has_evidence = bool(_extract_evidence_urls(interaction.message.components))
         view.add_item(discord.ui.Button(
-            label="🧹 Убрать доказательство",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"manage:remove:{ch_id}:{msg_id}",
+            label="📎 Добавить доказательство",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"manage:evidence:{ch_id}:{msg_id}",
             row=0,
         ))
-    view.add_item(discord.ui.Button(
-        label="✏️ Редактировать форму",
-        style=discord.ButtonStyle.secondary,
-        custom_id=f"manage:edit:{ch_id}:{msg_id}",
-        row=1,
-    ))
-    view.add_item(discord.ui.Button(
-        label="📋 Текст для отчёта",
-        style=discord.ButtonStyle.secondary,
-        custom_id=f"manage:formtext:{ch_id}:{msg_id}",
-        row=1,
-    ))
-    view.add_item(discord.ui.Button(
-        label="📷 Как добавить фото",
-        style=discord.ButtonStyle.secondary,
-        custom_id="manage:photo_help",
-        row=2,
-    ))
+        if has_evidence:
+            view.add_item(discord.ui.Button(
+                label="🧹 Убрать доказательство",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"manage:remove:{ch_id}:{msg_id}",
+                row=0,
+            ))
+        view.add_item(discord.ui.Button(
+            label="✏️ Редактировать форму",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"manage:edit:{ch_id}:{msg_id}",
+            row=1,
+        ))
+        view.add_item(discord.ui.Button(
+            label="📋 Текст для отчёта",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"manage:formtext:{ch_id}:{msg_id}",
+            row=1,
+        ))
+        view.add_item(discord.ui.Button(
+            label="📷 Как добавить фото",
+            style=discord.ButtonStyle.secondary,
+            custom_id="manage:photo_help",
+            row=2,
+        ))
     view.add_item(discord.ui.Button(
         label="🗑️ Удалить форму",
         style=discord.ButtonStyle.danger,
@@ -753,7 +762,8 @@ async def _manage_callback(interaction: discord.Interaction):
         row=2,
     ))
 
-    await interaction.response.send_message("**⚙️ Управление формой:**", view=view, ephemeral=True)
+    label = "**⚙️ Управление формой:**" if is_author else "**⚙️ Управление формой (удаление):**"
+    await interaction.response.send_message(label, view=view, ephemeral=True)
 
 
 async def _evidence_callback(interaction: discord.Interaction):
@@ -1252,14 +1262,29 @@ class ProofCog(commands.Cog):
             )
             return
 
-        # Все действия управления — только для автора формы
-        data   = _extract_v2_data(proof_msg)
-        mod_id = data.get("mod_id", 0)
-        if interaction.user.id != mod_id:
+        data      = _extract_v2_data(proof_msg)
+        mod_id    = data.get("mod_id", 0)
+        is_author = interaction.user.id == mod_id
+
+        # For author-only actions verify immediately
+        if action in ("evidence", "remove", "edit", "formtext") and not is_author:
             await interaction.response.send_message(
                 "❌ Управлять формой может только её **автор**.", ephemeral=True
             )
             return
+
+        # For delete: allow author OR someone with sufficient rank to approve this form
+        if action == "delete" and not is_author:
+            punishment = data.get("punishment", "")
+            title_d    = data.get("title", "")
+            ft         = _form_type_from_title(title_d) if title_d else _form_type_from_punishment(punishment)
+            min_level  = APPROVE_MIN_RANK.get(ft, 2)
+            if get_member_rank_level(interaction.user) < min_level:
+                await interaction.response.send_message(
+                    "❌ Удалить форму может только её **автор** или модератор с правом одобрения.",
+                    ephemeral=True,
+                )
+                return
 
         if action == "evidence":
             await interaction.response.send_modal(AddEvidenceModal(proof_msg))
@@ -1296,6 +1321,7 @@ class ProofCog(commands.Cog):
             )
 
         elif action == "delete":
+            by_leader = not is_author
             try:
                 await proof_msg.delete()
             except (discord.Forbidden, discord.HTTPException):
@@ -1303,7 +1329,7 @@ class ProofCog(commands.Cog):
                 return
             await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
             await _log_form_deletion(
-                interaction, data, by_leader=False, proof_message=proof_msg
+                interaction, data, by_leader=by_leader, proof_message=proof_msg
             )
 
     @app_commands.default_permissions(manage_messages=True)
