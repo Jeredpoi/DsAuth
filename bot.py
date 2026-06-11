@@ -42,14 +42,23 @@ async def main():
         await start_webserver(bot)
         _keepalive_task = asyncio.create_task(self_ping_loop())
         bot._keepalive_task = _keepalive_task  # prevent garbage collection
-        await bot.load_extension("cogs.proof")
-        await bot.load_extension("cogs.admin")
-        await bot.load_extension("cogs.auth")
-        await bot.load_extension("cogs.servers")
-        await bot.load_extension("cogs.stats")
-        await bot.load_extension("cogs.info")
-        await bot.load_extension("cogs.context_menus")
-        await bot.load_extension("cogs.modtools")
+        _exts = [
+            "cogs.proof",
+            "cogs.admin",
+            "cogs.auth",
+            "cogs.servers",
+            "cogs.stats",
+            "cogs.info",
+            "cogs.context_menus",
+            "cogs.modtools",
+        ]
+        for _ext in _exts:
+            try:
+                await bot.load_extension(_ext)
+                print(f"   ✅ Загружен: {_ext}")
+            except Exception as _e:
+                print(f"   ❌ Ошибка загрузки {_ext}: {_e}")
+                traceback.print_exc()
         await bot.start(TOKEN)
 
 
@@ -133,6 +142,11 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
     tb = traceback.format_exc()
     print(tb)
     cmd = getattr(interaction.command, "name", "unknown")
+    # For autocomplete interactions, respond() and send_message() are invalid —
+    # only autocomplete() works, so just log and return.
+    if interaction.type == discord.InteractionType.autocomplete:
+        print(f"   [autocomplete error] /{cmd}: {error}")
+        return
     # Answer the user first — the 3-second initial-response window can expire
     # if we do slow network calls before responding.
     msg = f"❌ Произошла ошибка: `{error}`"
