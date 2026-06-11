@@ -659,33 +659,34 @@ class ResetServerView(discord.ui.View):
         guild = interaction.guild
         server = self.server
 
-        # 1. Delete all channels in the category
-        category = discord.utils.get(guild.categories, name=server)
-        deleted = failed = 0
-        if category:
-            for ch in list(category.channels):
+        async with _get_server_lock(guild.id, server):
+            # 1. Delete all channels in the category
+            category = discord.utils.get(guild.categories, name=server)
+            deleted = failed = 0
+            if category:
+                for ch in list(category.channels):
+                    try:
+                        await ch.delete(reason=f"reset-server: {server}")
+                        deleted += 1
+                    except (discord.Forbidden, discord.HTTPException):
+                        failed += 1
                 try:
-                    await ch.delete(reason=f"reset-server: {server}")
-                    deleted += 1
+                    await category.delete(reason=f"reset-server: {server}")
                 except (discord.Forbidden, discord.HTTPException):
-                    failed += 1
+                    pass
+
+            # 2. Clear all DB channel IDs for this server
+            from db import clear_server_channel
+            for key in ("chat", "proof", "banform", "leadership", "logs", "auth", "category_id"):
+                clear_server_channel(guild.id, server, key)
+
+            # 3. Recreate everything (lock already held — call the locked variant directly)
             try:
-                await category.delete(reason=f"reset-server: {server}")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-        # 2. Clear all DB channel IDs for this server
-        from db import clear_server_channel
-        for key in ("chat", "proof", "banform", "leadership", "logs", "auth", "category_id"):
-            clear_server_channel(guild.id, server, key)
-
-        # 3. Recreate everything
-        try:
-            await ensure_server_channels(guild, server, self.cfg)
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
-            self.stop()
-            return
+                await _ensure_server_channels_locked(guild, server, self.cfg)
+            except discord.Forbidden:
+                await interaction.followup.send("❌ Нет прав для создания каналов.", ephemeral=True)
+                self.stop()
+                return
 
         self.stop()
         msg = f"♻️ Сервер **{server}** сброшен и пересоздан (удалено каналов: {deleted}"
@@ -787,6 +788,7 @@ async def _update_bot_presence(bot: commands.Bot):
 class ServersCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._ready_done = False
         self.status_loop.start()
         self.presence_loop.start()
 
@@ -815,6 +817,9 @@ class ServersCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
+        if self._ready_done:
+            return
+        self._ready_done = True
         for guild in self.bot.guilds:
             await post_monitoring_status(guild, self.bot.cfg, self.bot)
             await post_monitoring_stats(guild, self.bot.cfg, self.bot)
@@ -842,7 +847,10 @@ class ServersCog(commands.Cog):
         after_servers  = {r.name for r in after.roles  if is_server_role(r.name)}
 
         # Auto-create channels for newly assigned server role
+        home_guild_id = int(self.bot.cfg.get("home_guild_id") or 0)
         for name in after_servers - before_servers:
+            if home_guild_id and after.guild.id != home_guild_id:
+                continue  # категории создаются только на главном сервере
             try:
                 await ensure_server_channels(after.guild, name, self.bot.cfg)
             except discord.Forbidden:
@@ -1090,6 +1098,7 @@ class ServersCog(commands.Cog):
 
         embeds: list[discord.Embed] = []
         embed = discord.Embed(title="👥 Модераторы по серверам", color=0x2ECC71)
+        embed_chars = len(embed.title or "")
         for server_num in sorted(servers.keys(), key=lambda x: int(x) if x.isdigit() else 0):
             mods_list = servers[server_num]
             chunk: list[str] = []
@@ -1099,19 +1108,25 @@ class ServersCog(commands.Cog):
                 line = entry + "\n"
                 if chunk_len + len(line) > 1024 and chunk:
                     label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (прод.)"
-                    if len(embed.fields) >= 25:
+                    value = "\n".join(chunk)
+                    if len(embed.fields) >= 25 or embed_chars + len(label) + len(value) > 5500:
                         embeds.append(embed)
                         embed = discord.Embed(color=0x2ECC71)
-                    embed.add_field(name=label, value="\n".join(chunk), inline=False)
+                        embed_chars = 0
+                    embed.add_field(name=label, value=value, inline=False)
+                    embed_chars += len(label) + len(value)
                     chunk, chunk_len, part = [], 0, part + 1
                 chunk.append(entry)
                 chunk_len += len(line)
             if chunk:
                 label = f"Сервер {server_num} ({len(mods_list)})" if part == 1 else f"Сервер {server_num} (прод.)"
-                if len(embed.fields) >= 25:
+                value = "\n".join(chunk)
+                if len(embed.fields) >= 25 or embed_chars + len(label) + len(value) > 5500:
                     embeds.append(embed)
                     embed = discord.Embed(color=0x2ECC71)
-                embed.add_field(name=label, value="\n".join(chunk), inline=False)
+                    embed_chars = 0
+                embed.add_field(name=label, value=value, inline=False)
+                embed_chars += len(label) + len(value)
 
         embeds.append(embed)
         # Discord allows max 10 embeds per message
