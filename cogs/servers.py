@@ -206,37 +206,69 @@ def _build_status_view(bot) -> StatusLayoutView:
     )
 
 
+async def _upsert_monitoring_message(
+    ch: discord.TextChannel, view: discord.ui.LayoutView,
+    cfg: dict, guild_cfg: dict, id_key: str,
+) -> None:
+    """Edit the single bot message in a monitoring channel, never duplicating it.
+
+    Strategy: stored ID → fetch+edit. If the ID is lost (e.g. config wiped on
+    restart), find the bot's own messages in recent history: edit the newest,
+    delete the rest. Send a new message only if none exists.
+    """
+    msg: discord.Message | None = None
+    msg_id = guild_cfg.get(id_key, 0)
+    if msg_id:
+        try:
+            msg = await ch.fetch_message(msg_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            msg = None
+
+    if msg is None:
+        bot_id = ch.guild.me.id if ch.guild.me else 0
+        try:
+            async for m in ch.history(limit=25):
+                if m.author.id != bot_id:
+                    continue
+                if msg is None:
+                    msg = m  # newest bot message — reuse it
+                else:
+                    try:
+                        await m.delete()  # older duplicates from past restarts
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    if msg is not None:
+        try:
+            await msg.edit(view=view)
+            if guild_cfg.get(id_key) != msg.id:
+                guild_cfg[id_key] = msg.id
+                save_config(cfg)
+            return
+        except (discord.Forbidden, discord.HTTPException):
+            # Likely an old non-V2 message that can't take a LayoutView — replace it
+            try:
+                await msg.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    try:
+        new_msg = await ch.send(view=view)
+        guild_cfg[id_key] = new_msg.id
+        save_config(cfg)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
 async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
     ch = get_monitoring_channel(guild, cfg, "📡-статус-бота")
     if not ch:
         return
-
     view = _build_status_view(bot)
-
     guild_cfg = get_guild_cfg(cfg, guild.id)
-    msg_id = guild_cfg.get("status_message_id", 0)
-
-    if msg_id:
-        try:
-            msg = await ch.fetch_message(msg_id)
-            await msg.edit(view=view)
-            return
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            guild_cfg["status_message_id"] = 0
-            save_config(cfg)
-            # Old message may be a non-V2 message that cannot be edited — delete it
-            try:
-                msg = await ch.fetch_message(msg_id)
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-
-    try:
-        msg = await ch.send(view=view)
-        guild_cfg["status_message_id"] = msg.id
-        save_config(cfg)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    await _upsert_monitoring_message(ch, view, cfg, guild_cfg, "status_message_id")
 
 
 async def post_monitoring_stats(guild: discord.Guild, cfg: dict, bot) -> None:
@@ -274,26 +306,7 @@ async def post_monitoring_stats(guild: discord.Guild, cfg: dict, bot) -> None:
         accent_color=0x3498DB,
     ))
 
-    msg_id = guild_cfg.get("stats_message_id", 0)
-    if msg_id:
-        try:
-            msg = await ch.fetch_message(msg_id)
-            await msg.edit(view=view)
-            return
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            guild_cfg["stats_message_id"] = 0
-            # Old message may be a non-V2 message that cannot be edited — delete it
-            try:
-                msg = await ch.fetch_message(msg_id)
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-    try:
-        msg = await ch.send(view=view)
-        guild_cfg["stats_message_id"] = msg.id
-        save_config(cfg)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    await _upsert_monitoring_message(ch, view, cfg, guild_cfg, "stats_message_id")
 
 
 async def post_monitoring_activity(guild: discord.Guild, cfg: dict, bot) -> None:
@@ -327,26 +340,7 @@ async def post_monitoring_activity(guild: discord.Guild, cfg: dict, bot) -> None
     ))
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
-    msg_id = guild_cfg.get("activity_message_id", 0)
-    if msg_id:
-        try:
-            msg = await ch.fetch_message(msg_id)
-            await msg.edit(view=view)
-            return
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            guild_cfg["activity_message_id"] = 0
-            # Old message may be a non-V2 message that cannot be edited — delete it
-            try:
-                msg = await ch.fetch_message(msg_id)
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
-    try:
-        msg = await ch.send(view=view)
-        guild_cfg["activity_message_id"] = msg.id
-        save_config(cfg)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    await _upsert_monitoring_message(ch, view, cfg, guild_cfg, "activity_message_id")
 
 
 def get_log_channel(guild: discord.Guild, cfg: dict, server: str) -> discord.TextChannel | None:
@@ -762,21 +756,61 @@ class DeleteCategoryView(discord.ui.View):
 
 # ─── Cog ─────────────────────────────────────────────────────────────────────
 
+_BOT_STARTED_AT = time.time()
+
+
 async def _update_bot_presence(bot: commands.Bot):
     global _presence_index
-    from db import all_user_servers, get_global_form_counts
+    from db import all_user_servers, get_global_form_counts, _conn
     from datetime import datetime
     mods = len(all_user_servers())
     total_forms, approved = get_global_form_counts()
     ping_ms = round(bot.latency * 1000)
 
+    today_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    with _conn() as c:
+        today_forms = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE ts >= ?", (today_ts,)
+        ).fetchone()[0]
+        today_approved = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE ts >= ? AND status='approved'", (today_ts,)
+        ).fetchone()[0]
+        week_ts = today_ts - 6 * 86400
+        week_forms = c.execute(
+            "SELECT COUNT(*) FROM form_stats WHERE ts >= ?", (week_ts,)
+        ).fetchone()[0]
+        top_row = c.execute(
+            "SELECT mod_id, COUNT(*) as cnt FROM form_stats WHERE ts >= ? "
+            "GROUP BY mod_id ORDER BY cnt DESC LIMIT 1", (today_ts,)
+        ).fetchone()
+
+    uptime_h = int((time.time() - _BOT_STARTED_AT) / 3600)
+    uptime_str = f"{uptime_h // 24}д {uptime_h % 24}ч" if uptime_h >= 24 else f"{uptime_h}ч"
+
+    top_mod_name = ""
+    if top_row and top_row["cnt"] > 0:
+        top_user = bot.get_user(top_row["mod_id"])
+        if top_user:
+            top_mod_name = top_user.display_name[:20]
+
+    watching  = discord.ActivityType.watching
+    listening = discord.ActivityType.listening
+
     activities = [
-        discord.Activity(type=discord.ActivityType.watching,  name=f"за {mods} модераторами 🛡️"),
-        discord.Activity(type=discord.ActivityType.watching,  name=f"{total_forms} форм | ✅ {approved} одобрено"),
-        discord.Activity(type=discord.ActivityType.listening, name="/proof • /auth • /banform"),
-        discord.Activity(type=discord.ActivityType.watching,  name=f"пинг {ping_ms}мс 📡"),
+        discord.Activity(type=watching,  name=f"за {mods} модераторами 🛡️"),
+        discord.Activity(type=watching,  name=f"сегодня: {today_forms} форм | ✅ {today_approved}"),
+        discord.Activity(type=watching,  name=f"всего {total_forms} форм | ✅ {approved}"),
+        discord.Activity(type=watching,  name=f"за неделю: {week_forms} форм 📅"),
+        discord.Activity(type=listening, name="/proof • /banform • /gbanform"),
+        discord.Activity(type=listening, name="/auth • /stats • /activforms"),
+        discord.Activity(type=watching,  name=f"пинг {ping_ms}мс 📡 аптайм {uptime_str}"),
         discord.Game(name="Black Russia Moderation"),
+        discord.Activity(type=watching,  name="за порядком на серверах 👮"),
     ]
+    if top_mod_name:
+        activities.append(
+            discord.Activity(type=watching, name=f"🏆 топ дня: {top_mod_name} ({top_row['cnt']} форм)")
+        )
 
     activity = activities[_presence_index % len(activities)]
     _presence_index += 1
@@ -807,7 +841,7 @@ class ServersCog(commands.Cog):
     async def before_status_loop(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(minutes=15)
+    @tasks.loop(minutes=5)
     async def presence_loop(self):
         await _update_bot_presence(self.bot)
 

@@ -49,18 +49,64 @@ async def start_webserver(bot=None):
     return runner
 
 
+PING_INTERVAL = 60   # Replit засыпает через ~5 мин без внешней активности — пингуем чаще
+LOCAL_URL = "http://localhost:8080/health"
+
+
 async def self_ping_loop():
-    """Ping own server every 4 min to keep Replit alive."""
-    await asyncio.sleep(60)
+    """Ping own server every minute to keep Replit alive.
+
+    The loop must NEVER die: every iteration is fully wrapped, and the HTTP
+    session is recreated after failures. Consecutive failures are logged so
+    the cause is visible in the console when UptimeRobot reports downtime.
+    """
+    await asyncio.sleep(30)
     url = _public_url()
     print("   [keepalive] Self-ping loop запущен")
-    print(f"   [keepalive] Self-ping → {url}")
-    timeout = aiohttp.ClientTimeout(total=10)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        while True:
+    print(f"   [keepalive] Self-ping → {url} (каждые {PING_INTERVAL}с)")
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    session: aiohttp.ClientSession | None = None
+    fail_streak = 0
+
+    while True:
+        try:
+            if session is None or session.closed:
+                session = aiohttp.ClientSession(timeout=timeout)
+
+            ok = False
             try:
                 async with session.get(url) as resp:
+                    ok = resp.status < 500
+            except Exception as e:
+                # Public URL failed — check the local server so we know whether
+                # the web server itself or the external route is the problem
+                try:
+                    async with session.get(LOCAL_URL) as resp:
+                        local_ok = resp.status < 500
+                except Exception:
+                    local_ok = False
+                if fail_streak in (0, 4, 9):  # log 1st, 5th, 10th failure
+                    print(f"   [keepalive] ⚠️ Пинг {url} не прошёл ({type(e).__name__}); "
+                          f"локальный сервер: {'жив' if local_ok else 'НЕ ОТВЕЧАЕТ'}")
+                # Recreate session — a broken connector can poison all later requests
+                try:
+                    await session.close()
+                except Exception:
                     pass
-            except Exception:
-                pass
-            await asyncio.sleep(240)
+                session = None
+
+            if ok:
+                if fail_streak >= 5:
+                    print(f"   [keepalive] ✅ Пинг восстановлен после {fail_streak} ошибок")
+                fail_streak = 0
+            else:
+                fail_streak += 1
+        except Exception:
+            # Absolute safety net — the loop itself must survive anything
+            fail_streak += 1
+            session = None
+        try:
+            await asyncio.sleep(PING_INTERVAL)
+        except asyncio.CancelledError:
+            raise

@@ -464,6 +464,21 @@ def _split_urls(raw: str) -> list[str]:
     return [u.strip() for u in parts if u.strip().startswith("http")]
 
 
+def _message_has_approve(message: discord.Message) -> bool:
+    """True if the form message currently has an approve button (i.e. is a banform layout)."""
+    def walk(comps):
+        for comp in comps:
+            if getattr(comp, 'custom_id', None) == "punishment:approve":
+                return True
+            acc = getattr(comp, 'accessory', None)
+            if acc is not None and getattr(acc, 'custom_id', None) == "punishment:approve":
+                return True
+            if hasattr(comp, 'children') and comp.children and walk(comp.children):
+                return True
+        return False
+    return walk(message.components)
+
+
 def _rebuild_form_view(
     proof_message: discord.Message,
     evidence_urls: list[str],
@@ -475,6 +490,10 @@ def _rebuild_form_view(
 
     force_proof_layout=True → render as proof (manage button only, no approve/reject)
     even if the punishment type would normally produce a banform.
+
+    When punishment is NOT being changed, the existing layout is preserved:
+    a /proof form with a ban-type punishment (e.g. ГМ already issued the gban)
+    must NOT grow approve/reject buttons just because evidence was added.
     """
     data      = _extract_v2_data(proof_message)
     all_text  = _collect_text_from_components(proof_message.components)
@@ -488,7 +507,13 @@ def _rebuild_form_view(
         title = data.get("title", "Наказание пользователя")
         form_type = _form_type_from_title(title) if title else _form_type_from_punishment(old_punishment)
 
-    effective_form_type = "proof" if force_proof_layout else form_type
+    if force_proof_layout:
+        effective_form_type = "proof"
+    elif punishment is None:
+        # Keep whatever layout the message already has
+        effective_form_type = form_type if _message_has_approve(proof_message) else "proof"
+    else:
+        effective_form_type = form_type
 
     mod_id = data.get("mod_id", 0)
     h_text = _build_header_text(title, mod_id)
