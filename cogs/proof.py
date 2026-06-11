@@ -86,7 +86,7 @@ def _end_timestamp(punishment: str) -> tuple[int, str] | None:
     p = punishment.lower()
     if "мут" in p:
         return (int((now + timedelta(minutes=90)).timestamp()), "R")
-    if "15 дней" in p:
+    if "15 дней" in p and "7-15" not in p:
         return (int((now + timedelta(days=15)).timestamp()), "f")
     if "7 дней" in p or "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
         return (int((now + timedelta(days=7)).timestamp()), "f")
@@ -1226,6 +1226,9 @@ class ProofCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send("❌ Команда доступна только на сервере.", ephemeral=True)
+            return
         cfg   = interaction.client.cfg
 
         # Determine which servers to scan
@@ -1248,8 +1251,13 @@ class ProofCog(commands.Cog):
         cutoff = discord.utils.utcnow() - timedelta(days=30)
         results: list[tuple[str, discord.Message]] = []  # (server, message)
 
+        home_guild_id = int(cfg.get("home_guild_id") or 0)
+        home_guild = interaction.client.get_guild(home_guild_id) if home_guild_id else None
+
         for srv in servers_to_scan:
             banform_ch = get_banform_channel(guild, cfg, srv)
+            if not banform_ch and home_guild and home_guild.id != guild.id:
+                banform_ch = get_banform_channel(home_guild, cfg, srv)
             if not banform_ch:
                 continue
             try:

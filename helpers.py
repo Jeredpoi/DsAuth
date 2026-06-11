@@ -135,6 +135,8 @@ def date_end(punishment: str) -> str:
         return fmt_date(now + timedelta(minutes=90))
     if "предупрежд" in p:
         return fmt_date(now + timedelta(days=3))
+    if "15 дней" in p and "7-15" not in p:
+        return fmt_date(now + timedelta(days=15))
     if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
         return fmt_date(now + timedelta(days=7))
     if "перманент" in p or "глобальн" in p:
@@ -197,6 +199,8 @@ def build_command(punishment: str, user_id: int, rule_id: str) -> str:
         return f"/warn user:{uid} reason:{rule_id}"
     if "мут" in p:
         return f"/mute user:{uid} time:90 reason:{rule_id}"
+    if "15 дней" in p and "7-15" not in p:
+        return f"/ban user:{uid} time:15 reason:{rule_id}"
     if "7-15" in p or ("бан" in p and "перманент" not in p and "глобальн" not in p):
         return f"/ban user:{uid} time:7 reason:{rule_id}"
     if "перманент" in p:

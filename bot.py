@@ -40,7 +40,8 @@ async def main():
     async with bot:
         from keep_alive import start_webserver, self_ping_loop
         await start_webserver(bot)
-        asyncio.create_task(self_ping_loop())
+        _keepalive_task = asyncio.create_task(self_ping_loop())
+        bot._keepalive_task = _keepalive_task  # prevent garbage collection
         await bot.load_extension("cogs.proof")
         await bot.load_extension("cogs.admin")
         await bot.load_extension("cogs.auth")
@@ -65,8 +66,16 @@ def _git_version() -> str:
         return "неизвестно"
 
 
+_ready_once = False
+
+
 @bot.event
 async def on_ready():
+    global _ready_once
+    if _ready_once:
+        print(f"🔁 Переподключение: {bot.user}")
+        return
+    _ready_once = True
     # Ensure member cache is fully populated so guild.me is never None
     for guild in bot.guilds:
         if not guild.chunked:
@@ -123,10 +132,8 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
     tb = traceback.format_exc()
     print(tb)
     cmd = getattr(interaction.command, "name", "unknown")
-    await _send_error_to_monitoring(
-        f"Ошибка команды `/{cmd}`",
-        f"Пользователь: {interaction.user} ({interaction.user.id})\n{tb}",
-    )
+    # Answer the user first — the 3-second initial-response window can expire
+    # if we do slow network calls before responding.
     msg = f"❌ Произошла ошибка: `{error}`"
     try:
         if interaction.response.is_done():
@@ -135,6 +142,10 @@ async def on_app_command_error(interaction: discord.Interaction, error: Exceptio
             await interaction.response.send_message(msg, ephemeral=True)
     except Exception:
         pass
+    await _send_error_to_monitoring(
+        f"Ошибка команды `/{cmd}`",
+        f"Пользователь: {interaction.user} ({interaction.user.id})\n{tb}",
+    )
 
 
 @bot.event

@@ -1,6 +1,25 @@
 import asyncio
+import os
+
 from aiohttp import web
 import aiohttp
+
+
+def _public_url() -> str:
+    """Return the public health-check URL on Replit, or localhost as fallback.
+
+    Replit only counts EXTERNAL requests as activity, so we must ping the
+    public domain rather than localhost when possible.
+    """
+    domain = os.getenv("REPLIT_DEV_DOMAIN")
+    if not domain:
+        slug = os.getenv("REPL_SLUG")
+        owner = os.getenv("REPL_OWNER")
+        if slug and owner:
+            domain = f"{slug}.{owner}.repl.co"
+    if domain:
+        return f"https://{domain}/health"
+    return "http://localhost:8080/health"
 
 _bot_ref = None
 
@@ -33,12 +52,14 @@ async def start_webserver(bot=None):
 async def self_ping_loop():
     """Ping own server every 4 min to keep Replit alive."""
     await asyncio.sleep(60)
+    url = _public_url()
     print("   [keepalive] Self-ping loop запущен")
+    print(f"   [keepalive] Self-ping → {url}")
     timeout = aiohttp.ClientTimeout(total=10)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             try:
-                async with session.get("http://localhost:8080/health") as resp:
+                async with session.get(url) as resp:
                     pass
             except Exception:
                 pass

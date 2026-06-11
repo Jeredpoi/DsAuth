@@ -34,7 +34,7 @@ class ProofContextModal(discord.ui.Modal, title="Выдать наказание
         required=False,
     )
     server_input = discord.ui.TextInput(
-        label="Номер сервера (если у вас несколько серверных ролей)",
+        label="Номер сервера (необязательно)",
         placeholder="Например: 49 — оставьте пустым для автоопределения",
         max_length=2,
         required=False,

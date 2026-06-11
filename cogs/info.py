@@ -63,11 +63,13 @@ def _build_rules_view() -> discord.ui.LayoutView:
         ),
         discord.ui.Separator(),
     ]
+    block: list[str] = []
     for i, (emoji, title, desc) in enumerate(SERVER_RULES, 1):
-        items.append(discord.ui.TextDisplay(f"**{i}. {emoji} {title}**\n-# {desc}"))
-        if i < len(SERVER_RULES):
+        block.append(f"**{i}. {emoji} {title}**\n-# {desc}")
+        if i % 5 == 0 or i == len(SERVER_RULES):
+            items.append(discord.ui.TextDisplay("\n\n".join(block)))
             items.append(discord.ui.Separator())
-    items.append(discord.ui.Separator())
+            block = []
     items.append(discord.ui.TextDisplay(
         "### ⚠️ Нарушение правил влечёт взыскание или исключение из команды."
     ))
