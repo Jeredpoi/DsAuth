@@ -483,7 +483,9 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
             return
 
         existing = _extract_evidence_urls(self.proof_message.components)
-        combined = list(dict.fromkeys(existing + new_urls))[:4]  # deduplicate, max 4
+        merged   = list(dict.fromkeys(existing + new_urls))
+        capped   = len(merged) > 4
+        combined = merged[:4]  # Discord MediaGallery max 4 items
 
         data      = _extract_v2_data(self.proof_message)
         all_text  = _collect_text_from_components(self.proof_message.components)
@@ -506,8 +508,9 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
         _wire_callbacks(new_view)
 
         await self.proof_message.edit(view=new_view)
+        note = " (максимум 4, остальные отброшены)" if capped else ""
         await interaction.response.send_message(
-            f"✅ Доказательства добавлены ({len(combined)} шт.).", ephemeral=True
+            f"✅ Доказательства добавлены ({len(combined)} шт.){note}.", ephemeral=True
         )
 
 
@@ -558,16 +561,9 @@ async def _log_form_deletion(
 # ─── Button callbacks ─────────────────────────────────────────────────────────
 
 def _wire_callbacks(view: discord.ui.LayoutView) -> None:
-    for item in view.walk_children():
-        cid = getattr(item, 'custom_id', None)
-        if cid == "punishment:manage":
-            item.callback = _manage_callback
-        elif cid == "punishment:evidence":
-            item.callback = _evidence_callback
-        elif cid == "punishment:approve":
-            item.callback = _approve_callback
-        elif cid == "punishment:reject":
-            item.callback = _reject_callback
+    # All punishment:* buttons are handled by ProofCog.on_interaction.
+    # This function is intentionally a no-op; kept for call-site compatibility.
+    pass
 
 
 async def _manage_callback(interaction: discord.Interaction):
@@ -1050,6 +1046,22 @@ class ProofCog(commands.Cog):
         if interaction.type != discord.InteractionType.component:
             return
         custom_id: str = interaction.data.get("custom_id", "")
+
+        # Route punishment form buttons directly — avoids relying on discord.py's
+        # nested V2 component dispatch (walk_children doesn't traverse Container → Section → accessory).
+        if custom_id == "punishment:manage":
+            await _manage_callback(interaction)
+            return
+        if custom_id == "punishment:evidence":
+            await _evidence_callback(interaction)
+            return
+        if custom_id == "punishment:approve":
+            await _approve_callback(interaction)
+            return
+        if custom_id == "punishment:reject":
+            await _reject_callback(interaction)
+            return
+
         if not custom_id.startswith("manage:"):
             return
 
@@ -1293,4 +1305,3 @@ class ProofCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(ProofCog(bot))
-    bot.add_view(PunishmentLayoutView())
