@@ -22,14 +22,17 @@ def _public_url() -> str:
     return "http://localhost:8080/health"
 
 _bot_ref = None
+_last_ok_ping = 0.0  # время последнего успешного self-ping (time.time())
 
 
 async def _health_handler(request):
+    import time as _time
     if _bot_ref and _bot_ref.is_ready():
         ping = round(_bot_ref.latency * 1000)
         guilds = len(_bot_ref.guilds)
         name = str(_bot_ref.user) if _bot_ref.user else "..."
-        text = f"OK | {name} | guilds={guilds} | ping={ping}ms"
+        ago = int(_time.time() - _last_ok_ping) if _last_ok_ping else -1
+        text = f"OK | {name} | guilds={guilds} | ping={ping}ms | selfping={ago}s ago"
     else:
         text = "STARTING"
     return web.Response(text=text, content_type="text/plain")
@@ -97,6 +100,9 @@ async def self_ping_loop():
                 session = None
 
             if ok:
+                global _last_ok_ping
+                import time as _time
+                _last_ok_ping = _time.time()
                 if fail_streak >= 5:
                     print(f"   [keepalive] ✅ Пинг восстановлен после {fail_streak} ошибок")
                 fail_streak = 0

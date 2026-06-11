@@ -755,16 +755,22 @@ async def _escalate_form(
         # force_proof_layout=False → approve/reject buttons added automatically
     )
 
+    # Сначала отправляем новую форму, потом удаляем старую —
+    # иначе при ошибке отправки форма потеряется совсем
     try:
-        await old_message.delete()
+        new_msg = await new_ch.send(view=new_view)
     except (discord.Forbidden, discord.HTTPException) as e:
-        await interaction.followup.send(f"❌ Не удалось удалить старую форму: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ Не удалось отправить форму: {e}", ephemeral=True)
         return
 
     try:
-        await new_ch.send(view=new_view)
-    except (discord.Forbidden, discord.HTTPException) as e:
-        await interaction.followup.send(f"❌ Не удалось отправить форму: {e}", ephemeral=True)
+        await old_message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        # Новая форма уже на месте — старую можно удалить вручную
+        await interaction.followup.send(
+            f"⚠️ Форма перенесена в {new_ch.mention}, но старую не удалось удалить — удалите вручную.",
+            ephemeral=True,
+        )
         return
 
     min_level = APPROVE_MIN_RANK.get(new_form_type, 2)
@@ -1251,16 +1257,26 @@ async def _post_form(
     record_form(interaction.user.id, form_type, "sent",
                 violator_id=violator.id, rule_id=rule_id, punishment=punishment)
 
-    evidence_for_form = " ".join(ev_urls) if ev_urls else ""
-    form_text = build_form(cfg, violator, rule_id, punishment, evidence_url=evidence_for_form)
-    try:
-        await interaction.user.send(f"📝 **Форма для отчёта:**\n```\n{form_text}\n```")
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-
+    # Текст для отчёта больше не шлём в ЛС (копился мусор) —
+    # он доступен в любой момент: ⚙️ Управление → 📋 Текст для отчёта
     await interaction.followup.send(
-        f"✅ Отправлено в {proof_ch.mention} (сервер **{server}**)!", ephemeral=True
+        f"✅ Отправлено в {proof_ch.mention} (сервер **{server}**)!\n"
+        f"-# 📋 Текст для отчёта: кнопка **⚙️ Управление** на форме",
+        ephemeral=True,
     )
+
+
+def _combine_evidence(*attachments_and_url) -> str:
+    """Combine attachment files and a URL string into one space-separated URL list."""
+    urls: list[str] = []
+    for item in attachments_and_url:
+        if item is None:
+            continue
+        if isinstance(item, discord.Attachment):
+            urls.append(item.url)
+        elif isinstance(item, str):
+            urls.extend(_split_urls(item))
+    return " ".join(dict.fromkeys(urls))
 
 
 # ─── Cog ──────────────────────────────────────────────────────────────────────
@@ -1375,7 +1391,11 @@ class ProofCog(commands.Cog):
             )
             return
 
-        if action not in ("evidence", "remove", "edit", "formtext", "delete") or len(parts) < 4:
+        if action == "canceldel":
+            await interaction.response.send_message("↩️ Удаление отменено.", ephemeral=True)
+            return
+
+        if action not in ("evidence", "remove", "edit", "formtext", "delete", "confirmdel") or len(parts) < 4:
             return
         if not parts[2].isdigit() or not parts[3].isdigit():
             return
@@ -1408,7 +1428,7 @@ class ProofCog(commands.Cog):
             return
 
         # For delete: allow author OR someone with sufficient rank to approve this form
-        if action == "delete" and not is_author:
+        if action in ("delete", "confirmdel") and not is_author:
             punishment = data.get("punishment", "")
             title_d    = data.get("title", "")
             ft         = _form_type_from_title(title_d) if title_d else _form_type_from_punishment(punishment)
@@ -1455,6 +1475,29 @@ class ProofCog(commands.Cog):
             )
 
         elif action == "delete":
+            # Шаг 1: подтверждение — само удаление произойдёт по confirmdel
+            violator_id = data.get("user_id", 0)
+            punishment  = data.get("punishment", "?")
+            confirm_view = discord.ui.View(timeout=300)
+            confirm_view.add_item(discord.ui.Button(
+                label="✅ Да, удалить",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"manage:confirmdel:{ch_id}:{msg_id}",
+            ))
+            confirm_view.add_item(discord.ui.Button(
+                label="↩️ Отмена",
+                style=discord.ButtonStyle.secondary,
+                custom_id="manage:canceldel",
+            ))
+            await interaction.response.send_message(
+                f"⚠️ **Точно удалить форму?**\n"
+                f"-# Нарушитель: <@{violator_id}> | Наказание: {punishment}\n"
+                f"-# Это действие нельзя отменить.",
+                view=confirm_view,
+                ephemeral=True,
+            )
+
+        elif action == "confirmdel":
             by_leader = not is_author
             try:
                 await proof_msg.delete()
@@ -1473,7 +1516,9 @@ class ProofCog(commands.Cog):
         rule="Пункт правил (2.1, 3.1 и т.д.)",
         punishment="Выданное наказание",
         evidence="Скриншот доказательства (файл)",
-        evidence_url="Ссылка на доказательство (если нет файла)",
+        evidence2="Второй скриншот (файл)",
+        evidence3="Третий скриншот (файл)",
+        evidence_url="Ссылка(и) на доказательство (если нет файла)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
     async def proof_cmd(
@@ -1483,6 +1528,8 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str,
         evidence: discord.Attachment | None = None,
+        evidence2: discord.Attachment | None = None,
+        evidence3: discord.Attachment | None = None,
         evidence_url: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
@@ -1491,7 +1538,7 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
             return
 
-        ev_url = evidence.url if evidence else (evidence_url or "")
+        ev_url = _combine_evidence(evidence, evidence2, evidence3, evidence_url)
         await _post_form(interaction, interaction.user, user, rule, punishment, "proof",
                          evidence_url=ev_url)
 
@@ -1502,7 +1549,9 @@ class ProofCog(commands.Cog):
         rule="Пункт правил",
         punishment="Срок бана",
         evidence="Скриншот (файл)",
-        evidence_url="Ссылка на доказательство (если нет файла)",
+        evidence2="Второй скриншот (файл)",
+        evidence3="Третий скриншот (файл)",
+        evidence_url="Ссылка(и) на доказательство (если нет файла)",
     )
     @app_commands.choices(punishment=[
         app_commands.Choice(name="Бан 7 дней",  value="Бан 7 дней"),
@@ -1516,6 +1565,8 @@ class ProofCog(commands.Cog):
         rule: str,
         punishment: str = "Бан 7 дней",
         evidence: discord.Attachment | None = None,
+        evidence2: discord.Attachment | None = None,
+        evidence3: discord.Attachment | None = None,
         evidence_url: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
@@ -1524,7 +1575,7 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
             return
 
-        ev_url = evidence.url if evidence else (evidence_url or "")
+        ev_url = _combine_evidence(evidence, evidence2, evidence3, evidence_url)
         await _post_form(interaction, interaction.user, user, rule, punishment, "banform",
                          evidence_url=ev_url)
 
@@ -1534,7 +1585,9 @@ class ProofCog(commands.Cog):
         user="Нарушитель",
         rule="Пункт правил",
         evidence="Скриншот (файл)",
-        evidence_url="Ссылка на доказательство (если нет файла)",
+        evidence2="Второй скриншот (файл)",
+        evidence3="Третий скриншот (файл)",
+        evidence_url="Ссылка(и) на доказательство (если нет файла)",
     )
     @app_commands.autocomplete(rule=rule_autocomplete)
     async def gbanform_cmd(
@@ -1543,6 +1596,8 @@ class ProofCog(commands.Cog):
         user: discord.Member,
         rule: str,
         evidence: discord.Attachment | None = None,
+        evidence2: discord.Attachment | None = None,
+        evidence3: discord.Attachment | None = None,
         evidence_url: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
@@ -1551,7 +1606,7 @@ class ProofCog(commands.Cog):
             await interaction.followup.send("❌ Нельзя выдать наказание самому себе.", ephemeral=True)
             return
 
-        ev_url = evidence.url if evidence else (evidence_url or "")
+        ev_url = _combine_evidence(evidence, evidence2, evidence3, evidence_url)
         await _post_form(interaction, interaction.user, user, rule, "Глобальная блокировка", "gbanform",
                          evidence_url=ev_url)
 
