@@ -469,8 +469,13 @@ def _rebuild_form_view(
     evidence_urls: list[str],
     rule_id: str | None = None,
     punishment: str | None = None,
+    force_proof_layout: bool = False,
 ) -> discord.ui.LayoutView:
-    """Rebuild the form view from the message, optionally overriding rule/punishment."""
+    """Rebuild the form view from the message, optionally overriding rule/punishment.
+
+    force_proof_layout=True → render as proof (manage button only, no approve/reject)
+    even if the punishment type would normally produce a banform.
+    """
     data      = _extract_v2_data(proof_message)
     all_text  = _collect_text_from_components(proof_message.components)
     old_punishment = data.get("punishment", "")
@@ -483,17 +488,21 @@ def _rebuild_form_view(
         title = data.get("title", "Наказание пользователя")
         form_type = _form_type_from_title(title) if title else _form_type_from_punishment(old_punishment)
 
+    effective_form_type = "proof" if force_proof_layout else form_type
+
     mod_id = data.get("mod_id", 0)
     h_text = _build_header_text(title, mod_id)
 
     f_text = _extract_fields_text(all_text) or _build_fields_text(
-        data.get("user_id", 0), data.get("rule_id", ""), old_punishment, form_type
+        data.get("user_id", 0), data.get("rule_id", ""), old_punishment, effective_form_type
     )
 
     if rule_id is not None:
         f_text = re.sub(r"\*\*Причина наказания:\*\* .+", f"**Причина наказания:** {rule_id}", f_text)
     if punishment is not None:
         f_text = re.sub(r"\*\*Наказание:\*\* .+", f"**Наказание:** {new_punishment}", f_text)
+        # Remove old approval-wait line — it may no longer apply
+        f_text = "\n".join(l for l in f_text.split("\n") if "⏳" not in l)
         # Recompute the removal line for the new punishment
         f_text = "\n".join(l for l in f_text.split("\n") if not l.startswith("**Снятие:**"))
         end_info = _end_timestamp(new_punishment)
@@ -505,13 +514,17 @@ def _rebuild_form_view(
                     lines.insert(i + 1, f"**Снятие:** <t:{ts}:{fmt}>")
                     break
             f_text = "\n".join(lines)
+        # Re-add the approval-wait line if the effective form type still requires it
+        if effective_form_type in ("banform", "gbanform"):
+            min_rank = RANKS[APPROVE_MIN_RANK.get(effective_form_type, 2) - 1]
+            f_text += f"\n⏳ Ожидает одобрения: {min_rank}+"
 
     avatar_url = _extract_avatar_url(proof_message.components)
     color      = _punishment_color(new_punishment)
 
     view = _make_layout_view(
         h_text, f_text, evidence_urls, color,
-        violator_avatar_url=avatar_url, form_type=form_type,
+        violator_avatar_url=avatar_url, form_type=effective_form_type,
     )
     return view
 
@@ -614,6 +627,12 @@ class RemoveEvidenceModal(discord.ui.Modal, title="Убрать доказате
         )
 
 
+_PUNISHMENT_HINT = (
+    "Устное предупреждение / Предупреждение / Мут 90 минут"
+    " / Бан 7-15 дней / Перманентная блокировка / Глобальная блокировка"
+)
+
+
 class EditFormModal(discord.ui.Modal, title="Редактировать форму"):
     def __init__(self, proof_message: discord.Message, data: dict):
         super().__init__()
@@ -628,7 +647,7 @@ class EditFormModal(discord.ui.Modal, title="Редактировать форм
         self.punishment_input = discord.ui.TextInput(
             label="Наказание",
             default=data.get("punishment", ""),
-            placeholder="Например: Мут 90 минут",
+            placeholder=_PUNISHMENT_HINT[:100],
             max_length=100,
             required=True,
         )
@@ -639,17 +658,97 @@ class EditFormModal(discord.ui.Modal, title="Редактировать форм
         rule_id    = self.rule_input.value.strip()
         punishment = self.punishment_input.value.strip()
 
+        new_form_type = _form_type_from_punishment(punishment)
+        min_level     = APPROVE_MIN_RANK.get(new_form_type, 2)
+
+        member = (
+            interaction.guild.get_member(interaction.user.id)
+            if interaction.guild else None
+        ) or interaction.user
+        author_level = get_member_rank_level(member)
+
         await interaction.response.defer(ephemeral=True)
         evidence = _extract_evidence_urls(self.proof_message.components)
-        new_view = _rebuild_form_view(
-            self.proof_message, evidence, rule_id=rule_id, punishment=punishment
+
+        # If new punishment is proof-type, or author outranks the approval requirement:
+        # update the form in-place without approval buttons (they can handle it themselves).
+        if new_form_type == "proof" or author_level >= min_level:
+            new_view = _rebuild_form_view(
+                self.proof_message, evidence,
+                rule_id=rule_id, punishment=punishment,
+                force_proof_layout=True,
+            )
+            try:
+                await self.proof_message.edit(view=new_view)
+            except discord.HTTPException as e:
+                await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
+                return
+            await interaction.followup.send("✅ Форма обновлена.", ephemeral=True)
+        else:
+            # Author doesn't have the rank to self-approve this punishment type:
+            # move the form to the correct channel with approval buttons.
+            await _escalate_form(
+                interaction, self.proof_message,
+                rule_id=rule_id, punishment=punishment, evidence_urls=evidence,
+            )
+
+
+async def _escalate_form(
+    interaction: discord.Interaction,
+    old_message: discord.Message,
+    rule_id: str,
+    punishment: str,
+    evidence_urls: list[str],
+):
+    """Delete old proof form and repost it in the correct channel with approval buttons."""
+    cfg   = interaction.client.cfg
+    guild = interaction.guild
+
+    server = server_for_channel(guild, cfg, old_message.channel.id)
+    if not server:
+        await interaction.followup.send("❌ Не удалось определить сервер формы.", ephemeral=True)
+        return
+
+    home_guild_id = int(cfg.get("home_guild_id") or 0)
+    home_guild    = interaction.client.get_guild(home_guild_id) if home_guild_id else None
+
+    new_ch = get_banform_channel(guild, cfg, server)
+    if not new_ch and home_guild and home_guild.id != guild.id:
+        new_ch = get_banform_channel(home_guild, cfg, server)
+
+    if not new_ch:
+        await interaction.followup.send(
+            f"❌ Канал форм банов не найден (сервер **{server}**).\n"
+            f"-# Привяжите канал командой `/linkserver server:{server} banform:#канал`",
+            ephemeral=True,
         )
-        try:
-            await self.proof_message.edit(view=new_view)
-        except discord.HTTPException as e:
-            await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
-            return
-        await interaction.followup.send("✅ Форма обновлена.", ephemeral=True)
+        return
+
+    new_form_type = _form_type_from_punishment(punishment)
+    new_view = _rebuild_form_view(
+        old_message, evidence_urls, rule_id=rule_id, punishment=punishment
+        # force_proof_layout=False → approve/reject buttons added automatically
+    )
+
+    try:
+        await old_message.delete()
+    except (discord.Forbidden, discord.HTTPException) as e:
+        await interaction.followup.send(f"❌ Не удалось удалить старую форму: {e}", ephemeral=True)
+        return
+
+    try:
+        await new_ch.send(view=new_view)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        await interaction.followup.send(f"❌ Не удалось отправить форму: {e}", ephemeral=True)
+        return
+
+    min_level = APPROVE_MIN_RANK.get(new_form_type, 2)
+    req_rank  = RANKS[min_level - 1]
+    await interaction.followup.send(
+        f"✅ Форма перемещена в {new_ch.mention} (сервер **{server}**).\n"
+        f"-# Ожидает одобрения: **{req_rank}+**",
+        ephemeral=True,
+    )
 
 
 async def _log_form_deletion(

@@ -174,7 +174,7 @@ RANK_LEVELS: dict[str, int] = {r: i + 1 for i, r in enumerate(RANKS)}
 APPROVE_MIN_RANK: dict[str, int] = {
     "proof":   RANK_LEVELS["Модератор"],
     "banform": RANK_LEVELS["Старший модератор"],
-    "gbanform": RANK_LEVELS["Куратор модерации"],
+    "gbanform": RANK_LEVELS["Главный модератор"],
 }
 
 LEADERSHIP_RANKS: frozenset[str] = frozenset({
