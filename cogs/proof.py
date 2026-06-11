@@ -954,7 +954,8 @@ async def _approve_callback(interaction: discord.Interaction):
     except (discord.Forbidden, discord.HTTPException) as e:
         await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
         return
-    record_form(mod_id, form_type, "approved")
+    record_form(mod_id, form_type, "approved",
+                violator_id=user_id, rule_id=rule_id, punishment=punishment)
 
     # Route log by the channel the form is in, not by moderator's current roles
     server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
@@ -995,7 +996,8 @@ async def _reject_callback(interaction: discord.Interaction):
     except (discord.Forbidden, discord.HTTPException) as e:
         await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
         return
-    record_form(mod_id, form_type, "rejected")
+    record_form(mod_id, form_type, "rejected",
+                violator_id=user_id, rule_id=rule_id, punishment=punishment)
 
     server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if server:
@@ -1077,10 +1079,17 @@ def _resolve_server(member: discord.Member, cfg: dict, server_override: str | No
         return server_roles[0], None
 
     if len(server_roles) > 1:
+        # Несколько ролей — разводим через закреплённый в БД сервер
+        member_id = getattr(member, "id", None)
+        if member_id:
+            from db import get_user_server
+            db_server = get_user_server(member_id)
+            if db_server and db_server in server_roles:
+                return db_server, None
         role_list = ", ".join(f"**{s}**" for s in sorted(server_roles, key=int))
         return None, (
             f"❌ У вас несколько ролей серверов: {role_list}.\n"
-            "Укажите нужный через параметр `server`, например: `/proof server:49 ...`"
+            "Попросите администратора закрепить ваш сервер: `/assignserver`"
         )
 
     # No server role at all — try DB
@@ -1239,7 +1248,8 @@ async def _post_form(
             f"❌ Не удалось отправить форму в {proof_ch.mention}: {e}", ephemeral=True
         )
         return
-    record_form(interaction.user.id, form_type, "sent")
+    record_form(interaction.user.id, form_type, "sent",
+                violator_id=violator.id, rule_id=rule_id, punishment=punishment)
 
     evidence_for_form = " ".join(ev_urls) if ev_urls else ""
     form_text = build_form(cfg, violator, rule_id, punishment, evidence_url=evidence_for_form)
@@ -1464,9 +1474,8 @@ class ProofCog(commands.Cog):
         punishment="Выданное наказание",
         evidence="Скриншот доказательства (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
-        server="Номер сервера (если не определяется автоматически)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete, server=server_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete, punishment=punishment_autocomplete)
     async def proof_cmd(
         self,
         interaction: discord.Interaction,
@@ -1475,7 +1484,6 @@ class ProofCog(commands.Cog):
         punishment: str,
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
-        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1485,7 +1493,7 @@ class ProofCog(commands.Cog):
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         await _post_form(interaction, interaction.user, user, rule, punishment, "proof",
-                         evidence_url=ev_url, server_override=server)
+                         evidence_url=ev_url)
 
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="banform", description="Сгенерировать форму бана")
@@ -1495,13 +1503,12 @@ class ProofCog(commands.Cog):
         punishment="Срок бана",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
-        server="Номер сервера (если у вас несколько ролей серверов)",
     )
     @app_commands.choices(punishment=[
         app_commands.Choice(name="Бан 7 дней",  value="Бан 7 дней"),
         app_commands.Choice(name="Бан 15 дней", value="Бан 15 дней"),
     ])
-    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete)
     async def banform_cmd(
         self,
         interaction: discord.Interaction,
@@ -1510,7 +1517,6 @@ class ProofCog(commands.Cog):
         punishment: str = "Бан 7 дней",
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
-        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1520,7 +1526,7 @@ class ProofCog(commands.Cog):
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         await _post_form(interaction, interaction.user, user, rule, punishment, "banform",
-                         evidence_url=ev_url, server_override=server)
+                         evidence_url=ev_url)
 
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.command(name="gbanform", description="Сгенерировать форму глобального бана")
@@ -1529,9 +1535,8 @@ class ProofCog(commands.Cog):
         rule="Пункт правил",
         evidence="Скриншот (файл)",
         evidence_url="Ссылка на доказательство (если нет файла)",
-        server="Номер сервера (если у вас несколько ролей серверов)",
     )
-    @app_commands.autocomplete(rule=rule_autocomplete, server=server_autocomplete)
+    @app_commands.autocomplete(rule=rule_autocomplete)
     async def gbanform_cmd(
         self,
         interaction: discord.Interaction,
@@ -1539,7 +1544,6 @@ class ProofCog(commands.Cog):
         rule: str,
         evidence: discord.Attachment | None = None,
         evidence_url: str | None = None,
-        server: str | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -1549,7 +1553,7 @@ class ProofCog(commands.Cog):
 
         ev_url = evidence.url if evidence else (evidence_url or "")
         await _post_form(interaction, interaction.user, user, rule, "Глобальная блокировка", "gbanform",
-                         evidence_url=ev_url, server_override=server)
+                         evidence_url=ev_url)
 
 
     @app_commands.default_permissions(manage_roles=True)

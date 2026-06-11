@@ -53,7 +53,27 @@ def init_db():
             channel_id INTEGER NOT NULL,
             PRIMARY KEY (guild_id, server, key)
         );
+
+        CREATE TABLE IF NOT EXISTS reminders (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id   INTEGER NOT NULL,
+            remind_at INTEGER NOT NULL,
+            text      TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reminders_at ON reminders(remind_at);
         """)
+        # Новые колонки form_stats — для /warns и /checkuser (история по нарушителю)
+        for col, decl in (
+            ("violator_id", "INTEGER NOT NULL DEFAULT 0"),
+            ("rule_id",     "TEXT NOT NULL DEFAULT ''"),
+            ("punishment",  "TEXT NOT NULL DEFAULT ''"),
+        ):
+            try:
+                c.execute(f"ALTER TABLE form_stats ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass  # колонка уже существует
+        c.execute("CREATE INDEX IF NOT EXISTS idx_form_stats_violator ON form_stats(violator_id, ts)")
 
 
 # ─── user_servers ─────────────────────────────────────────────────────────────
@@ -190,14 +210,47 @@ def get_global_form_counts() -> tuple[int, int]:
     return total, approved
 
 
-def record_form(mod_id: int, form_type: str, status: str):
+def record_form(mod_id: int, form_type: str, status: str,
+                violator_id: int = 0, rule_id: str = "", punishment: str = ""):
     if not mod_id:
         return
     with _conn() as c:
         c.execute(
-            "INSERT INTO form_stats (mod_id, form_type, status) VALUES (?, ?, ?)",
-            (mod_id, form_type, status),
+            "INSERT INTO form_stats (mod_id, form_type, status, violator_id, rule_id, punishment) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (mod_id, form_type, status, violator_id, rule_id, punishment),
         )
+
+
+# ─── reminders ────────────────────────────────────────────────────────────────
+
+def add_reminder(user_id: int, remind_at: int, text: str) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO reminders (user_id, remind_at, text) VALUES (?, ?, ?)",
+            (user_id, remind_at, text),
+        )
+        return cur.lastrowid
+
+
+def pop_due_reminders(now_ts: int) -> list[dict]:
+    """Return and delete all reminders due by now_ts."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, user_id, text FROM reminders WHERE remind_at <= ?", (now_ts,)
+        ).fetchall()
+        if rows:
+            c.execute("DELETE FROM reminders WHERE remind_at <= ?", (now_ts,))
+        return [dict(r) for r in rows]
+
+
+def list_reminders(user_id: int) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, remind_at, text FROM reminders WHERE user_id=? ORDER BY remind_at",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def get_stats(mod_id: int, since_ts: int = 0) -> dict:

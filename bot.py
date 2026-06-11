@@ -49,6 +49,7 @@ async def main():
         await bot.load_extension("cogs.stats")
         await bot.load_extension("cogs.info")
         await bot.load_extension("cogs.context_menus")
+        await bot.load_extension("cogs.modtools")
         await bot.start(TOKEN)
 
 
