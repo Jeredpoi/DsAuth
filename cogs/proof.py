@@ -456,7 +456,72 @@ async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, view: disco
         pass
 
 
-# ─── Add Evidence Modal ───────────────────────────────────────────────────────
+# ─── Manage modals ────────────────────────────────────────────────────────────
+
+def _split_urls(raw: str) -> list[str]:
+    """Split user input into http(s) URLs (whitespace and commas as separators)."""
+    parts = re.split(r"[\s,]+", raw)
+    return [u.strip() for u in parts if u.strip().startswith("http")]
+
+
+def _rebuild_form_view(
+    proof_message: discord.Message,
+    evidence_urls: list[str],
+    rule_id: str | None = None,
+    punishment: str | None = None,
+) -> discord.ui.LayoutView:
+    """Rebuild the form view from the message, optionally overriding rule/punishment."""
+    data      = _extract_v2_data(proof_message)
+    all_text  = _collect_text_from_components(proof_message.components)
+    old_punishment = data.get("punishment", "")
+    new_punishment = punishment if punishment is not None else old_punishment
+
+    if punishment is not None:
+        title = _punishment_title(new_punishment)
+        form_type = _form_type_from_punishment(new_punishment)
+    else:
+        title = data.get("title", "Наказание пользователя")
+        form_type = _form_type_from_title(title) if title else _form_type_from_punishment(old_punishment)
+
+    mod_id = data.get("mod_id", 0)
+    h_text = _build_header_text(title, mod_id)
+
+    f_text = _extract_fields_text(all_text) or _build_fields_text(
+        data.get("user_id", 0), data.get("rule_id", ""), old_punishment, form_type
+    )
+
+    if rule_id is not None:
+        f_text = re.sub(r"\*\*Причина наказания:\*\* .+", f"**Причина наказания:** {rule_id}", f_text)
+    if punishment is not None:
+        f_text = re.sub(r"\*\*Наказание:\*\* .+", f"**Наказание:** {new_punishment}", f_text)
+        # Recompute the removal line for the new punishment
+        f_text = "\n".join(l for l in f_text.split("\n") if not l.startswith("**Снятие:**"))
+        end_info = _end_timestamp(new_punishment)
+        if end_info:
+            ts, fmt = end_info
+            lines = f_text.split("\n")
+            for i, l in enumerate(lines):
+                if l.startswith("**Время:**"):
+                    lines.insert(i + 1, f"**Снятие:** <t:{ts}:{fmt}>")
+                    break
+            f_text = "\n".join(lines)
+
+    avatar_url = _extract_avatar_url(proof_message.components)
+    color      = _punishment_color(new_punishment)
+
+    view = _make_layout_view(
+        h_text, f_text, evidence_urls, color,
+        violator_avatar_url=avatar_url, form_type=form_type,
+    )
+    return view
+
+
+_MEDIA_LINK_HINT = (
+    "-# Ссылка должна вести **напрямую на файл** (заканчиваться на .png/.jpg/.mp4 и т.п.).\n"
+    "-# Как получить: загрузи фото в любой канал Discord → ПКМ на фото → "
+    "**Копировать ссылку на медиа** → вставь сюда."
+)
+
 
 class AddEvidenceModal(discord.ui.Modal, title="Добавить доказательство"):
     url_input = discord.ui.TextInput(
@@ -472,50 +537,119 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
         self.proof_message = proof_message
 
     async def on_submit(self, interaction: discord.Interaction):
-        new_urls = [u.strip() for u in self.url_input.value.split() if u.strip().startswith("http")]
+        new_urls = _split_urls(self.url_input.value)
         if not new_urls:
             await interaction.response.send_message(
-                "❌ Ссылка не найдена.\n"
-                "-# Как добавить фото: загрузи его в любой канал Discord → "
-                "нажми ПКМ на фото → **Копировать ссылку на медиа** → вставь сюда.",
-                ephemeral=True,
+                f"❌ Ссылка не найдена.\n{_MEDIA_LINK_HINT}", ephemeral=True,
             )
             return
+
+        await interaction.response.defer(ephemeral=True)
 
         existing = _extract_evidence_urls(self.proof_message.components)
         merged   = list(dict.fromkeys(existing + new_urls))
         capped   = len(merged) > 4
         combined = merged[:4]  # Discord MediaGallery max 4 items
 
-        data      = _extract_v2_data(self.proof_message)
-        all_text  = _collect_text_from_components(self.proof_message.components)
-        title     = data.get("title", "Наказание пользователя")
-        mod_id    = data.get("mod_id", 0)
-        punishment = data.get("punishment", "")
-        form_type  = _form_type_from_title(title) if title else _form_type_from_punishment(punishment)
-
-        h_text     = _build_header_text(title, mod_id)
-        f_text     = _extract_fields_text(all_text) or _build_fields_text(
-            data.get("user_id", 0), data.get("rule_id", ""), punishment, form_type
-        )
-        avatar_url = _extract_avatar_url(self.proof_message.components)
-        color      = _punishment_color(punishment)
-
-        new_view = _make_layout_view(
-            h_text, f_text, combined, color,
-            violator_avatar_url=avatar_url, form_type=form_type,
-        )
-        _wire_callbacks(new_view)
-
-        await self.proof_message.edit(view=new_view)
-        note = " (максимум 4, остальные отброшены)" if capped else ""
-        await interaction.response.send_message(
+        new_view = _rebuild_form_view(self.proof_message, combined)
+        try:
+            await self.proof_message.edit(view=new_view)
+        except discord.HTTPException:
+            # Discord rejects MediaGallery items that are not direct media links
+            await interaction.followup.send(
+                f"❌ Discord отклонил ссылку — это не прямая ссылка на медиафайл.\n{_MEDIA_LINK_HINT}",
+                ephemeral=True,
+            )
+            return
+        note = " (максимум 4, лишние отброшены)" if capped else ""
+        await interaction.followup.send(
             f"✅ Доказательства добавлены ({len(combined)} шт.){note}.", ephemeral=True
         )
 
 
-FORM_DELETE_AUTHOR_WINDOW = 300   # seconds author can delete their own form
-FORM_LEADER_MIN_LEVEL     = 4     # КМ+ can delete any form at any time
+class RemoveEvidenceModal(discord.ui.Modal, title="Убрать доказательство"):
+    num_input = discord.ui.TextInput(
+        label="Номер(а) для удаления или «все»",
+        placeholder="Например: 2  или  1 3  или  все",
+        max_length=20,
+        required=True,
+    )
+
+    def __init__(self, proof_message: discord.Message):
+        super().__init__()
+        self.proof_message = proof_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        existing = _extract_evidence_urls(self.proof_message.components)
+        if not existing:
+            await interaction.response.send_message("🔗 Доказательств нет.", ephemeral=True)
+            return
+
+        raw = self.num_input.value.strip().lower()
+        if raw in ("все", "всё", "all", "*"):
+            remaining = []
+        else:
+            nums = {int(n) for n in re.findall(r"\d+", raw)}
+            if not nums:
+                await interaction.response.send_message(
+                    "❌ Укажите номер доказательства (1–4) или «все».", ephemeral=True
+                )
+                return
+            remaining = [u for i, u in enumerate(existing, 1) if i not in nums]
+            if len(remaining) == len(existing):
+                await interaction.response.send_message(
+                    f"❌ Нет доказательств с такими номерами (всего: {len(existing)}).", ephemeral=True
+                )
+                return
+
+        await interaction.response.defer(ephemeral=True)
+        new_view = _rebuild_form_view(self.proof_message, remaining)
+        try:
+            await self.proof_message.edit(view=new_view)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Удалено {len(existing) - len(remaining)} шт. Осталось: {len(remaining)}.", ephemeral=True
+        )
+
+
+class EditFormModal(discord.ui.Modal, title="Редактировать форму"):
+    def __init__(self, proof_message: discord.Message, data: dict):
+        super().__init__()
+        self.proof_message = proof_message
+        self.rule_input = discord.ui.TextInput(
+            label="Пункт правил",
+            default=data.get("rule_id", ""),
+            placeholder="Например: 2.1",
+            max_length=50,
+            required=True,
+        )
+        self.punishment_input = discord.ui.TextInput(
+            label="Наказание",
+            default=data.get("punishment", ""),
+            placeholder="Например: Мут 90 минут",
+            max_length=100,
+            required=True,
+        )
+        self.add_item(self.rule_input)
+        self.add_item(self.punishment_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        rule_id    = self.rule_input.value.strip()
+        punishment = self.punishment_input.value.strip()
+
+        await interaction.response.defer(ephemeral=True)
+        evidence = _extract_evidence_urls(self.proof_message.components)
+        new_view = _rebuild_form_view(
+            self.proof_message, evidence, rule_id=rule_id, punishment=punishment
+        )
+        try:
+            await self.proof_message.edit(view=new_view)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
+            return
+        await interaction.followup.send("✅ Форма обновлена.", ephemeral=True)
 
 
 async def _log_form_deletion(
@@ -569,38 +703,57 @@ def _wire_callbacks(view: discord.ui.LayoutView) -> None:
 async def _manage_callback(interaction: discord.Interaction):
     data   = _extract_v2_data(interaction.message)
     mod_id = data.get("mod_id", 0)
-    is_author = interaction.user.id == mod_id
-    is_leader = get_member_rank_level(interaction.user) >= FORM_LEADER_MIN_LEVEL
 
-    if not is_author and not is_leader:
+    if interaction.user.id != mod_id:
         await interaction.response.send_message(
-            "❌ Управление доступно только **автору** формы или руководству (КМ+).", ephemeral=True
+            "❌ Управлять формой может только её **автор**.", ephemeral=True
         )
         return
 
     ch_id  = interaction.message.channel.id
     msg_id = interaction.message.id
+    has_evidence = bool(_extract_evidence_urls(interaction.message.components))
 
     view = discord.ui.View(timeout=1800)  # 30 min
-    if is_author:
+    view.add_item(discord.ui.Button(
+        label="📎 Добавить доказательство",
+        style=discord.ButtonStyle.primary,
+        custom_id=f"manage:evidence:{ch_id}:{msg_id}",
+        row=0,
+    ))
+    if has_evidence:
         view.add_item(discord.ui.Button(
-            label="📎 Добавить доказательство",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"manage:evidence:{ch_id}:{msg_id}",
-        ))
-        view.add_item(discord.ui.Button(
-            label="📷 Как добавить фото",
+            label="🧹 Убрать доказательство",
             style=discord.ButtonStyle.secondary,
-            custom_id="manage:photo_help",
+            custom_id=f"manage:remove:{ch_id}:{msg_id}",
+            row=0,
         ))
+    view.add_item(discord.ui.Button(
+        label="✏️ Редактировать форму",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"manage:edit:{ch_id}:{msg_id}",
+        row=1,
+    ))
+    view.add_item(discord.ui.Button(
+        label="📋 Текст для отчёта",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"manage:formtext:{ch_id}:{msg_id}",
+        row=1,
+    ))
+    view.add_item(discord.ui.Button(
+        label="📷 Как добавить фото",
+        style=discord.ButtonStyle.secondary,
+        custom_id="manage:photo_help",
+        row=2,
+    ))
     view.add_item(discord.ui.Button(
         label="🗑️ Удалить форму",
         style=discord.ButtonStyle.danger,
         custom_id=f"manage:delete:{ch_id}:{msg_id}",
+        row=2,
     ))
 
-    label = "**⚙️ Управление формой:**" if is_author else "**⚙️ Управление формой (руководство):**"
-    await interaction.response.send_message(label, view=view, ephemeral=True)
+    await interaction.response.send_message("**⚙️ Управление формой:**", view=view, ephemeral=True)
 
 
 async def _evidence_callback(interaction: discord.Interaction):
@@ -1078,7 +1231,7 @@ class ProofCog(commands.Cog):
             )
             return
 
-        if action not in ("evidence", "delete") or len(parts) < 4:
+        if action not in ("evidence", "remove", "edit", "formtext", "delete") or len(parts) < 4:
             return
         if not parts[2].isdigit() or not parts[3].isdigit():
             return
@@ -1099,31 +1252,50 @@ class ProofCog(commands.Cog):
             )
             return
 
+        # Все действия управления — только для автора формы
+        data   = _extract_v2_data(proof_msg)
+        mod_id = data.get("mod_id", 0)
+        if interaction.user.id != mod_id:
+            await interaction.response.send_message(
+                "❌ Управлять формой может только её **автор**.", ephemeral=True
+            )
+            return
+
         if action == "evidence":
             await interaction.response.send_modal(AddEvidenceModal(proof_msg))
 
+        elif action == "remove":
+            await interaction.response.send_modal(RemoveEvidenceModal(proof_msg))
+
+        elif action == "edit":
+            await interaction.response.send_modal(EditFormModal(proof_msg, data))
+
+        elif action == "formtext":
+            user_id = data.get("user_id", 0)
+            violator = None
+            if user_id:
+                violator = interaction.client.get_user(user_id)
+                if not violator:
+                    try:
+                        violator = await interaction.client.fetch_user(user_id)
+                    except (discord.NotFound, discord.HTTPException):
+                        violator = None
+            if not violator:
+                await interaction.response.send_message(
+                    "❌ Не удалось определить нарушителя из формы.", ephemeral=True
+                )
+                return
+            evidence = " ".join(_extract_evidence_urls(proof_msg.components))
+            form_text = build_form(
+                interaction.client.cfg, violator,
+                data.get("rule_id", ""), data.get("punishment", ""),
+                evidence_url=evidence,
+            )
+            await interaction.response.send_message(
+                f"📝 **Форма для отчёта:**\n```\n{form_text}\n```", ephemeral=True
+            )
+
         elif action == "delete":
-            data = _extract_v2_data(proof_msg)
-            mod_id = data.get("mod_id", 0)
-            is_author = interaction.user.id == mod_id
-            is_leader = get_member_rank_level(interaction.user) >= FORM_LEADER_MIN_LEVEL
-
-            if not is_author and not is_leader:
-                await interaction.response.send_message(
-                    "❌ Только автор формы или руководство (КМ+) могут удалить форму.", ephemeral=True
-                )
-                return
-
-            age_sec = (discord.utils.utcnow() - proof_msg.created_at).total_seconds()
-            if not is_leader and age_sec > FORM_DELETE_AUTHOR_WINDOW:
-                await interaction.response.send_message(
-                    "❌ Форму можно удалить только в первые **5 минут** после отправки.\n"
-                    "Для удаления обратитесь к руководству (КМ+).",
-                    ephemeral=True,
-                )
-                return
-
-            log_data = _extract_v2_data(proof_msg)
             try:
                 await proof_msg.delete()
             except (discord.Forbidden, discord.HTTPException):
@@ -1131,7 +1303,7 @@ class ProofCog(commands.Cog):
                 return
             await interaction.response.send_message("🗑️ Форма удалена.", ephemeral=True)
             await _log_form_deletion(
-                interaction, log_data, by_leader=is_leader, proof_message=proof_msg
+                interaction, data, by_leader=False, proof_message=proof_msg
             )
 
     @app_commands.default_permissions(manage_messages=True)
