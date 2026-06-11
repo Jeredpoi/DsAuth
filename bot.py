@@ -103,14 +103,17 @@ async def _send_error_to_monitoring(title: str, error_text: str):
                 ch = discord.utils.get(guild.text_channels, name="🔔-авторизации", category=cat)
         if not ch:
             continue
-        embed = discord.Embed(
-            title=f"🚨 {title}",
-            description=f"```\n{error_text[:3900]}\n```",
-            color=0xE74C3C,
-            timestamp=discord.utils.utcnow(),
-        )
+        ts = int(discord.utils.utcnow().timestamp())
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## 🚨 {title}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"```\n{error_text[:3500]}\n```"),
+            discord.ui.TextDisplay(f"-# <t:{ts}:f>"),
+            accent_color=0xE74C3C,
+        ))
         try:
-            await ch.send(embed=embed)
+            await ch.send(view=view)
         except Exception:
             pass
 

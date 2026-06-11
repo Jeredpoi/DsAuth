@@ -308,14 +308,20 @@ class AdminCog(commands.Cog):
                 key = None
             groups[key].append(f"`/{cmd.name}`")
 
-        embed = discord.Embed(title="🔐 Права команд", color=0x5865F2)
+        items: list = [
+            discord.ui.TextDisplay("## 🔐 Права команд"),
+            discord.ui.Separator(),
+        ]
         for perm_key, label in PERM_LABELS.items():
             cmds = groups[perm_key]
             if cmds:
-                embed.add_field(name=label, value="\n".join(cmds), inline=False)
-        embed.set_footer(text="Переопределения — в Настройки сервера → Интеграции")
+                items.append(discord.ui.TextDisplay(f"**{label}**\n" + "\n".join(cmds)))
+        items.append(discord.ui.TextDisplay("-# Переопределения — в Настройки сервера → Интеграции"))
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(*items, accent_color=0x5865F2))
+
+        await interaction.followup.send(view=view, ephemeral=True)
 
     # ─── /deploy ──────────────────────────────────────────────────────────
     @_ADMIN_PERM

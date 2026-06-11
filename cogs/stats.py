@@ -28,17 +28,22 @@ class StatsCog(commands.Cog):
 
         s = get_stats(interaction.user.id, since)
 
-        embed = discord.Embed(
-            title="📊 Ваша статистика",
-            description=f"Период: **{label}**",
-            color=0x3498DB,
-        )
-        embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
-        embed.add_field(name="📤 Отправлено", value=str(s["sent"]), inline=True)
-        embed.add_field(name="✅ Одобрено", value=str(s["approved"]), inline=True)
-        embed.add_field(name="❌ Отклонено", value=str(s["rejected"]), inline=True)
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(f"## 📊 Ваша статистика\n-# Период: **{label}**"),
+                accessory=discord.ui.Thumbnail(interaction.user.display_avatar.url),
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"📤 **Отправлено:** {s['sent']}\n"
+                f"✅ **Одобрено:** {s['approved']}\n"
+                f"❌ **Отклонено:** {s['rejected']}"
+            ),
+            accent_color=0x3498DB,
+        ))
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

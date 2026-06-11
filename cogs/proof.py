@@ -405,9 +405,9 @@ def _rebuild_view_from_message(
     return view
 
 
-# ─── Log embed ────────────────────────────────────────────────────────────────
+# ─── Log view ─────────────────────────────────────────────────────────────────
 
-def _build_log_embed(
+def _build_log_view(
     title: str,
     mod_id: int,
     user_id: int,
@@ -415,15 +415,23 @@ def _build_log_embed(
     punishment: str,
     color: int,
     status_text: str = "",
-) -> discord.Embed:
-    embed = discord.Embed(title=title, color=color)
-    embed.add_field(name="Модератор",          value=f"<@{mod_id}>",   inline=False)
-    embed.add_field(name="Нарушитель",         value=str(user_id),     inline=False)
-    embed.add_field(name="Причина наказания",  value=rule_id,          inline=False)
-    embed.add_field(name="Наказание",          value=punishment,       inline=False)
+) -> discord.ui.LayoutView:
+    items: list = [
+        discord.ui.TextDisplay(f"## {title}"),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            f"**Модератор:** <@{mod_id}>\n"
+            f"**Нарушитель:** {user_id}\n"
+            f"**Причина наказания:** {rule_id}\n"
+            f"**Наказание:** {punishment}"
+        ),
+    ]
     if status_text:
-        embed.set_footer(text=status_text)
-    return embed
+        items.append(discord.ui.Separator())
+        items.append(discord.ui.TextDisplay(f"-# {status_text}"))
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_color=color))
+    return view
 
 
 def _server_for_mod_id(guild: discord.Guild | None, mod_id: int) -> str | None:
@@ -438,12 +446,12 @@ def _server_for_mod_id(guild: discord.Guild | None, mod_id: int) -> str | None:
     return get_user_server(mod_id)
 
 
-async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, embed: discord.Embed):
+async def _post_to_log(guild: discord.Guild, cfg: dict, server: str, view: discord.ui.LayoutView):
     log_ch = get_log_channel(guild, cfg, server)
     if not log_ch:
         return
     try:
-        await log_ch.send(embed=embed)
+        await log_ch.send(view=view)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -526,17 +534,23 @@ async def _log_form_deletion(
     log_ch = get_log_channel(interaction.guild, interaction.client.cfg, server)
     if not log_ch:
         return
-    embed = discord.Embed(
-        title="🗑️ Форма удалена руководством" if by_leader else "🗑️ Форма удалена автором",
-        color=0x95A5A6,
-        timestamp=discord.utils.utcnow(),
-    )
-    embed.add_field(name="Форма",      value=title,                               inline=False)
-    embed.add_field(name="Нарушитель", value=f"<@{user_id}>" if user_id else "?", inline=True)
-    embed.add_field(name="Удалил",     value=str(interaction.user),               inline=True)
-    embed.add_field(name="Наказание",  value=punishment,                          inline=False)
+    header = "🗑️ Форма удалена руководством" if by_leader else "🗑️ Форма удалена автором"
+    violator = f"<@{user_id}>" if user_id else "?"
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay(f"## {header}"),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            f"**Форма:** {title}\n"
+            f"**Нарушитель:** {violator}\n"
+            f"**Удалил:** {interaction.user}\n"
+            f"**Наказание:** {punishment}"
+        ),
+        discord.ui.TextDisplay(f"-# <t:{int(discord.utils.utcnow().timestamp())}:f>"),
+        accent_color=0x95A5A6,
+    ))
     try:
-        await log_ch.send(embed=embed)
+        await log_ch.send(view=view)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
@@ -662,8 +676,8 @@ async def _approve_callback(interaction: discord.Interaction):
     # Route log by the channel the form is in, not by moderator's current roles
     server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if server:
-        log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
-        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
+        log_view = _build_log_view(title or "Наказание", mod_id, user_id, rule_id, punishment, 0x2ECC71, status)
+        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_view)
 
     await interaction.followup.send("✅ Форма одобрена.", ephemeral=True)
 
@@ -702,8 +716,8 @@ async def _reject_callback(interaction: discord.Interaction):
 
     server = server_for_channel(interaction.guild, interaction.client.cfg, interaction.message.channel.id)
     if server:
-        log_embed = _build_log_embed(title or "Наказание", mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
-        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_embed)
+        log_view = _build_log_view(title or "Наказание", mod_id, user_id, rule_id, punishment, 0xE74C3C, status)
+        await _post_to_log(interaction.guild, interaction.client.cfg, server, log_view)
 
     await interaction.followup.send("❌ Форма отклонена.", ephemeral=True)
 

@@ -112,24 +112,68 @@ def get_monitoring_channel(guild: discord.Guild, cfg: dict, name: str) -> discor
     return None
 
 
-class StatusRefreshView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        btn = discord.ui.Button(
-            label="🔄 Обновить",
-            style=discord.ButtonStyle.secondary,
-            custom_id="status:refresh",
-        )
-        btn.callback = _status_refresh_callback
-        self.add_item(btn)
-
-
 async def _status_refresh_callback(interaction: discord.Interaction):
     await interaction.response.defer()
     await post_monitoring_status(interaction.guild, interaction.client.cfg, interaction.client)
 
 
-def _build_status_embed(bot) -> discord.Embed:
+class StatusLayoutView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        uptime: tuple[int, int, int] = (0, 0, 0),
+        ping_ms: int = 0,
+        guild_count: int = 0,
+        mod_count: int = 0,
+        total_forms: int = 0,
+        approved_forms: int = 0,
+        rejected_forms: int = 0,
+        pending_forms: int = 0,
+        today_forms: int = 0,
+    ):
+        super().__init__(timeout=None)
+        h, m, s = uptime
+        status_icon = "🟢" if ping_ms < 200 else "🟡" if ping_ms < 500 else "🔴"
+        accent = 0x2ECC71 if ping_ms < 200 else 0xF1C40F if ping_ms < 500 else 0xE74C3C
+
+        refresh_button = discord.ui.Button(
+            label="🔄 Обновить",
+            style=discord.ButtonStyle.secondary,
+            custom_id="status:refresh",
+        )
+        refresh_button.callback = _status_refresh_callback
+
+        self.add_item(discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay("## 📡 Статус бота"),
+                accessory=refresh_button,
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"🕐 **Аптайм:** {h}ч {m}м {s}с\n"
+                f"{status_icon} **Пинг:** {ping_ms} мс\n"
+                f"🌐 **Серверов:** {guild_count}\n"
+                f"👥 **Модераторов в БД:** {mod_count}"
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"📋 **Форм всего:** {total_forms}\n"
+                f"✅ **Одобрено:** {approved_forms}\n"
+                f"📊 **Отклонено:** {rejected_forms}\n"
+                f"⏳ **На рассмотрении:** {pending_forms}\n"
+                f"🗓️ **Сегодня:** {today_forms}"
+            ),
+            discord.ui.TextDisplay(f"-# Обновлено <t:{int(time.time())}:R>"),
+            accent_color=accent,
+        ))
+
+
+def _make_persistent_status_view() -> StatusLayoutView:
+    """Minimal StatusLayoutView used only to register the persistent button."""
+    return StatusLayoutView()
+
+
+def _build_status_view(bot) -> StatusLayoutView:
     from db import all_user_servers, get_global_form_counts, _conn
     elapsed = int(time.time() - _BOT_START_TIME)
     h, rem = divmod(elapsed, 3600)
@@ -137,7 +181,6 @@ def _build_status_embed(bot) -> discord.Embed:
     total_forms, approved_forms = get_global_form_counts()
     mod_count = len(all_user_servers())
     ping_ms = round(bot.latency * 1000)
-    status_icon = "🟢" if ping_ms < 200 else "🟡" if ping_ms < 500 else "🔴"
 
     with _conn() as c:
         rejected_forms = c.execute(
@@ -150,22 +193,17 @@ def _build_status_embed(bot) -> discord.Embed:
             "SELECT COUNT(*) FROM form_stats WHERE ts >= ?", (today_ts,)
         ).fetchone()[0]
 
-    embed = discord.Embed(
-        title="📡 Статус бота",
-        color=0x2ECC71 if ping_ms < 200 else 0xF1C40F if ping_ms < 500 else 0xE74C3C,
-        timestamp=discord.utils.utcnow(),
+    return StatusLayoutView(
+        uptime=(h, m, s),
+        ping_ms=ping_ms,
+        guild_count=len(bot.guilds),
+        mod_count=mod_count,
+        total_forms=total_forms,
+        approved_forms=approved_forms,
+        rejected_forms=rejected_forms,
+        pending_forms=max(pending_forms, 0),
+        today_forms=today_forms,
     )
-    embed.add_field(name="🕐 Аптайм",           value=f"{h}ч {m}м {s}с",              inline=True)
-    embed.add_field(name=f"{status_icon} Пинг", value=f"{ping_ms} мс",                inline=True)
-    embed.add_field(name="🌐 Серверов",          value=str(len(bot.guilds)),            inline=True)
-    embed.add_field(name="👥 Модераторов в БД",  value=str(mod_count),                 inline=True)
-    embed.add_field(name="📋 Форм всего",        value=str(total_forms),               inline=True)
-    embed.add_field(name="✅ Одобрено",          value=str(approved_forms),            inline=True)
-    embed.add_field(name="📊 Отклонено",         value=str(rejected_forms),            inline=True)
-    embed.add_field(name="⏳ На рассмотрении",   value=str(max(pending_forms, 0)),     inline=True)
-    embed.add_field(name="🗓️ Форм сегодня",      value=str(today_forms),               inline=True)
-    embed.set_footer(text="Обновлено")
-    return embed
 
 
 async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
@@ -173,8 +211,7 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
     if not ch:
         return
 
-    embed = _build_status_embed(bot)
-    view  = StatusRefreshView()
+    view = _build_status_view(bot)
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
     msg_id = guild_cfg.get("status_message_id", 0)
@@ -182,14 +219,20 @@ async def post_monitoring_status(guild: discord.Guild, cfg: dict, bot) -> None:
     if msg_id:
         try:
             msg = await ch.fetch_message(msg_id)
-            await msg.edit(embed=embed, view=view)
+            await msg.edit(view=view)
             return
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             guild_cfg["status_message_id"] = 0
             save_config(cfg)
+            # Old message may be a non-V2 message that cannot be edited — delete it
+            try:
+                msg = await ch.fetch_message(msg_id)
+                await msg.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
 
     try:
-        msg = await ch.send(embed=embed, view=view)
+        msg = await ch.send(view=view)
         guild_cfg["status_message_id"] = msg.id
         save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
@@ -215,30 +258,38 @@ async def post_monitoring_stats(guild: discord.Guild, cfg: dict, bot) -> None:
     if not rows:
         return
 
-    embed = discord.Embed(
-        title="📊 Статистика форм по модераторам",
-        color=0x3498DB,
-        timestamp=discord.utils.utcnow(),
-    )
     lines = []
     for i, row in enumerate(rows, 1):
         lines.append(
             f"`{i:2}.` <@{row['mod_id']}> — "
             f"✅{row['approved']} ❌{row['rejected']} 📋{row['total']}"
         )
-    embed.description = "\n".join(lines)
-    embed.set_footer(text="Обновлено")
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("## 📊 Статистика форм по модераторам"),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay("\n".join(lines)),
+        discord.ui.TextDisplay(f"-# Обновлено <t:{int(time.time())}:R>"),
+        accent_color=0x3498DB,
+    ))
 
     msg_id = guild_cfg.get("stats_message_id", 0)
     if msg_id:
         try:
             msg = await ch.fetch_message(msg_id)
-            await msg.edit(embed=embed)
+            await msg.edit(view=view)
             return
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             guild_cfg["stats_message_id"] = 0
+            # Old message may be a non-V2 message that cannot be edited — delete it
+            try:
+                msg = await ch.fetch_message(msg_id)
+                await msg.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
     try:
-        msg = await ch.send(embed=embed)
+        msg = await ch.send(view=view)
         guild_cfg["stats_message_id"] = msg.id
         save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
@@ -261,29 +312,37 @@ async def post_monitoring_activity(guild: discord.Guild, cfg: dict, bot) -> None
             (today_ts,)
         ).fetchall()
 
-    embed = discord.Embed(
-        title="👥 Активность модераторов сегодня",
-        color=0x9B59B6,
-        timestamp=discord.utils.utcnow(),
-    )
     if rows:
-        lines = [f"<@{r['mod_id']}> — 📋{r['total']} (✅{r['approved']})" for r in rows]
-        embed.description = "\n".join(lines)
+        body = "\n".join(f"<@{r['mod_id']}> — 📋{r['total']} (✅{r['approved']})" for r in rows)
     else:
-        embed.description = "_Сегодня форм ещё не было._"
-    embed.set_footer(text="Обновлено")
+        body = "_Сегодня форм ещё не было._"
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("## 👥 Активность модераторов сегодня"),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(body),
+        discord.ui.TextDisplay(f"-# Обновлено <t:{int(time.time())}:R>"),
+        accent_color=0x9B59B6,
+    ))
 
     guild_cfg = get_guild_cfg(cfg, guild.id)
     msg_id = guild_cfg.get("activity_message_id", 0)
     if msg_id:
         try:
             msg = await ch.fetch_message(msg_id)
-            await msg.edit(embed=embed)
+            await msg.edit(view=view)
             return
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             guild_cfg["activity_message_id"] = 0
+            # Old message may be a non-V2 message that cannot be edited — delete it
+            try:
+                msg = await ch.fetch_message(msg_id)
+                await msg.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
     try:
-        msg = await ch.send(embed=embed)
+        msg = await ch.send(view=view)
         guild_cfg["activity_message_id"] = msg.id
         save_config(cfg)
     except (discord.Forbidden, discord.HTTPException):
@@ -1061,5 +1120,5 @@ class ServersCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    bot.add_view(StatusRefreshView())
+    bot.add_view(_make_persistent_status_view())
     await bot.add_cog(ServersCog(bot))
