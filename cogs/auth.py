@@ -106,43 +106,20 @@ class AuthModal(discord.ui.Modal, title="Заявка на авторизаци�
             )
             return
 
-        # Send monitoring message first so we can embed its ID in the auth embed footer
+        # Send monitoring message first so we can embed its ID in the application message
         monitoring_msg_id = 0
         log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
         if log_ch:
-            log_embed = discord.Embed(title="📥 Новая заявка на авторизацию", color=0x3498DB,
-                                      timestamp=discord.utils.utcnow())
-            log_embed.set_thumbnail(url=member.display_avatar.url)
-            log_embed.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
-            log_embed.add_field(name="Сервер",   value=server_val,  inline=True)
-            log_embed.add_field(name="Должность", value=rank_expanded, inline=True)
-            log_embed.add_field(name="Аккаунт создан",
-                                value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
-            log_embed.set_footer(text="⏳ Ожидает решения")
+            log_view = _build_log_view(member, server_val, rank_expanded)
             try:
-                log_msg = await log_ch.send(embed=log_embed)
+                log_msg = await log_ch.send(view=log_view)
                 monitoring_msg_id = log_msg.id
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        footer_text = (
-            f"Ожидает решения... | logmsg:{monitoring_msg_id}"
-            if monitoring_msg_id else "Ожидает решения..."
-        )
-        embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
-        embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Участник", value=f"{member.mention}\n`{member.id}`", inline=True)
-        embed.add_field(name="Аккаунт создан",
-                        value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
-        embed.add_field(name="Никнейм", value=self.nickname.value, inline=False)
-        embed.add_field(name="Сервер", value=server_val, inline=True)
-        embed.add_field(name="Заявленная должность", value=rank_expanded, inline=True)
-        embed.set_footer(text=footer_text)
-
-        view = AuthReviewView(member.id)
+        view = _build_auth_app_view(member, self.nickname.value, server_val, rank_expanded, monitoring_msg_id)
         try:
-            await dest_ch.send(embed=embed, view=view)
+            await dest_ch.send(view=view)
         except (discord.Forbidden, discord.HTTPException) as e:
             # Clean up the monitoring "Новая заявка" so it doesn't dangle without a review
             if monitoring_msg_id and log_ch:
@@ -229,6 +206,94 @@ class AuthReviewView(discord.ui.View):
             style=discord.ButtonStyle.danger,
             custom_id=f"auth:reject:{user_id}",
         ))
+
+
+# ─── Components V2 helpers ────────────────────────────────────────────────────
+
+def _collect_text(comps) -> str:
+    texts = []
+    for comp in comps:
+        if hasattr(comp, 'content') and comp.content:
+            texts.append(comp.content)
+        if hasattr(comp, 'children') and comp.children:
+            texts.append(_collect_text(comp.children))
+    return "\n".join(t for t in texts if t)
+
+
+def _extract_app_data(message: discord.Message) -> tuple[str | None, int]:
+    """Return (server_num, logmsg_id) from either embed-based or V2 application message."""
+    if message.embeds:
+        server_num = None
+        for field in message.embeds[0].fields:
+            if field.name == "Сервер":
+                server_num = field.value.strip()
+                break
+        footer_text = getattr(message.embeds[0].footer, 'text', '') or ''
+        m = re.search(r'logmsg:(\d+)', footer_text)
+        return server_num, int(m.group(1)) if m else 0
+    text = _collect_text(message.components)
+    m_srv = re.search(r'\*\*Сервер:\*\*\s*(\d+)', text)
+    m_log = re.search(r'logmsg:(\d+)', text)
+    return (m_srv.group(1) if m_srv else None), (int(m_log.group(1)) if m_log else 0)
+
+
+def _build_auth_app_view(member, nickname: str, server_val: str, rank_expanded: str, monitoring_msg_id: int) -> discord.ui.LayoutView:
+    created_ts = int(member.created_at.timestamp())
+    options = [discord.SelectOption(label=r, value=r) for r in RANKS]
+    select = discord.ui.Select(
+        placeholder="Выбрать должность и одобрить...",
+        options=options,
+        custom_id=f"auth:approve:{member.id}",
+    )
+    reject_btn = discord.ui.Button(
+        label="❌ Отклонить",
+        style=discord.ButtonStyle.danger,
+        custom_id=f"auth:reject:{member.id}",
+    )
+    status_line = f"-# ⏳ Ожидает решения..." + (f" | logmsg:{monitoring_msg_id}" if monitoring_msg_id else "")
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.Section(
+            discord.ui.TextDisplay(
+                f"## 📋 Заявка на авторизацию\n**Участник:** {member.mention} (`{member.id}`)"
+            ),
+            accessory=discord.ui.Thumbnail(member.display_avatar.url),
+        ),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            f"**Никнейм:** {nickname}\n"
+            f"**Сервер:** {server_val}\n"
+            f"**Заявленная должность:** {rank_expanded}\n"
+            f"**Аккаунт создан:** <t:{created_ts}:D>"
+        ),
+        discord.ui.Separator(),
+        discord.ui.ActionRow(select),
+        discord.ui.ActionRow(reject_btn),
+        discord.ui.TextDisplay(status_line),
+        accent_color=0x3498DB,
+    ))
+    return view
+
+
+def _build_log_view(member, server_val: str, rank_expanded: str) -> discord.ui.LayoutView:
+    """Monitoring log: new auth application."""
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.Section(
+            discord.ui.TextDisplay(
+                "## 📥 Новая заявка на авторизацию\n"
+                f"**Участник:** {member.mention} (`{member.id}`)\n"
+                f"**Сервер:** {server_val}\n"
+                f"**Должность:** {rank_expanded}\n"
+                f"**Аккаунт создан:** <t:{int(member.created_at.timestamp())}:D>"
+            ),
+            accessory=discord.ui.Thumbnail(member.display_avatar.url),
+        ),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay("-# ⏳ Ожидает решения"),
+        accent_color=0x3498DB,
+    ))
+    return view
 
 
 # ─── Forum helpers ────────────────────────────────────────────────────────────
@@ -329,11 +394,11 @@ class AuthCog(commands.Cog):
     def cog_unload(self):
         self.autokick_loop.cancel()
 
-    async def _log_event(self, guild: discord.Guild, embed: discord.Embed) -> None:
+    async def _log_event(self, guild: discord.Guild, view: discord.ui.LayoutView) -> None:
         ch = get_monitoring_channel(guild, self.bot.cfg, "🔔-авторизации")
         if ch:
             try:
-                await ch.send(embed=embed)
+                await ch.send(view=view)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
@@ -367,11 +432,20 @@ class AuthCog(commands.Cog):
                     except discord.Forbidden:
                         pass
                     await guild.kick(member, reason=f"Не авторизован за {AUTOKICK_DAYS} дня")
-                    e = discord.Embed(title="⚡ Автокик", color=0xE74C3C,
-                                      timestamp=discord.utils.utcnow())
-                    e.add_field(name="Участник", value=f"{member} (`{member.id}`)", inline=False)
-                    e.add_field(name="Причина", value=f"Не авторизован в течение {AUTOKICK_DAYS} дней", inline=False)
-                    await self._log_event(guild, e)
+                    kick_view = discord.ui.LayoutView(timeout=None)
+                    kick_view.add_item(discord.ui.Container(
+                        discord.ui.TextDisplay(
+                            "## ⚡ Автокик\n"
+                            f"**Участник:** {member} (`{member.id}`)\n"
+                            f"**Причина:** Не авторизован в течение {AUTOKICK_DAYS} дней"
+                        ),
+                        discord.ui.Separator(),
+                        discord.ui.TextDisplay(
+                            f"-# <t:{int(discord.utils.utcnow().timestamp())}:f>"
+                        ),
+                        accent_color=0xE74C3C,
+                    ))
+                    await self._log_event(guild, kick_view)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -441,12 +515,8 @@ class AuthCog(commands.Cog):
                 except discord.Forbidden:
                     pass
 
-        server_num = None
-        if interaction.message.embeds:
-            for field in interaction.message.embeds[0].fields:
-                if field.name == "Сервер":
-                    server_num = field.value.strip()
-                    break
+        # Extract data BEFORE _disable_review mutates the message
+        server_num, logmsg_id = _extract_app_data(interaction.message)
 
         # Team role (общая роль для всех авторизованных)
         guild_cfg_cur = get_guild_cfg(self.bot.cfg, guild.id)
@@ -512,14 +582,6 @@ class AuthCog(commands.Cog):
             except discord.Forbidden:
                 pass
 
-        # Extract logmsg_id BEFORE _disable_review mutates the embed footer in-place
-        logmsg_id = 0
-        if interaction.message.embeds:
-            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
-            m_log = re.search(r'logmsg:(\d+)', footer_text)
-            if m_log:
-                logmsg_id = int(m_log.group(1))
-
         guild_cfg_approve = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
             interaction, approved=True,
@@ -554,27 +616,36 @@ class AuthCog(commands.Cog):
         await interaction.followup.send(msg, ephemeral=True)
 
         # Edit the existing monitoring message instead of posting a new one
-        e = discord.Embed(title="✅ Авторизация одобрена", color=0x2ECC71,
-                          timestamp=discord.utils.utcnow())
-        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
-        e.add_field(name="Должность", value=rank or "—", inline=True)
-        e.add_field(name="Сервер", value=server_num or "—", inline=True)
-        e.add_field(name="Одобрил", value=str(interaction.user), inline=False)
-        e.set_footer(text="✅ Одобрена")
+        new_view = discord.ui.LayoutView(timeout=None)
+        new_view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## ✅ Авторизация одобрена\n"
+                f"**Участник:** {member.mention} (`{member.id}`)\n"
+                f"**Должность:** {rank or '—'}\n"
+                f"**Сервер:** {server_num or '—'}\n"
+                f"**Одобрил:** {interaction.user}"
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# ✅ Одобрена • <t:{int(discord.utils.utcnow().timestamp())}:f>"
+            ),
+            accent_color=0x2ECC71,
+        ))
 
         if logmsg_id:
             log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
             if log_ch:
                 try:
                     lmsg = await log_ch.fetch_message(logmsg_id)
-                    await lmsg.edit(embed=e)
+                    # Old embed-based messages can't be edited into V2 — fall back to a new send
+                    await lmsg.edit(view=new_view)
                 except Exception:
                     try:
-                        await log_ch.send(embed=e)
+                        await log_ch.send(view=new_view)
                     except Exception:
                         pass
         else:
-            await self._log_event(interaction.guild, e)
+            await self._log_event(interaction.guild, new_view)
 
     async def _handle_reject(self, interaction: discord.Interaction, user_id: int):
         is_owner = (
@@ -593,13 +664,8 @@ class AuthCog(commands.Cog):
 
         db.set_auth_cooldown(user_id)  # 24ч cooldown
 
-        # Extract logmsg_id BEFORE _disable_review mutates the embed footer in-place
-        logmsg_id = 0
-        if interaction.message.embeds:
-            footer_text = getattr(interaction.message.embeds[0].footer, 'text', '') or ''
-            m_log = re.search(r'logmsg:(\d+)', footer_text)
-            if m_log:
-                logmsg_id = int(m_log.group(1))
+        # Extract logmsg_id BEFORE _disable_review mutates the message
+        _, logmsg_id = _extract_app_data(interaction.message)
 
         guild_cfg_reject = get_guild_cfg(self.bot.cfg, interaction.guild_id)
         await self._disable_review(
@@ -618,37 +684,57 @@ class AuthCog(commands.Cog):
                 pass
         await interaction.followup.send("❌ Заявка отклонена.", ephemeral=True)
 
-        e = discord.Embed(title="❌ Заявка отклонена", color=0xE74C3C,
-                          timestamp=discord.utils.utcnow())
-        e.add_field(name="Участник",
-                    value=f"{member.mention} (`{user_id}`)" if member else f"`{user_id}`",
-                    inline=True)
-        e.add_field(name="Отклонил", value=str(interaction.user), inline=True)
-        e.add_field(name="Cooldown", value=f"{AUTH_COOLDOWN_HOURS}ч", inline=True)
-        e.set_footer(text="❌ Отклонена")
+        member_line = f"{member.mention} (`{user_id}`)" if member else f"`{user_id}`"
+        new_view = discord.ui.LayoutView(timeout=None)
+        new_view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## ❌ Заявка отклонена\n"
+                f"**Участник:** {member_line}\n"
+                f"**Отклонил:** {interaction.user}\n"
+                f"**Cooldown:** {AUTH_COOLDOWN_HOURS}ч"
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# ❌ Отклонена • <t:{int(discord.utils.utcnow().timestamp())}:f>"
+            ),
+            accent_color=0xE74C3C,
+        ))
 
         if logmsg_id:
             log_ch = get_monitoring_channel(interaction.guild, self.bot.cfg, "🔔-авторизации")
             if log_ch:
                 try:
                     lmsg = await log_ch.fetch_message(logmsg_id)
-                    await lmsg.edit(embed=e)
+                    # Old embed-based messages can't be edited into V2 — fall back to a new send
+                    await lmsg.edit(view=new_view)
                 except Exception:
                     try:
-                        await log_ch.send(embed=e)
+                        await log_ch.send(view=new_view)
                     except Exception:
                         pass
         else:
-            await self._log_event(interaction.guild, e)
+            await self._log_event(interaction.guild, new_view)
 
     async def _disable_review(self, interaction: discord.Interaction, approved: bool, label: str):
-        if not interaction.message.embeds:
-            await interaction.message.edit(view=None)
+        message = interaction.message
+        if message.embeds:  # legacy embed-based application
+            embed = message.embeds[0]
+            embed.color = discord.Color.green() if approved else discord.Color.red()
+            embed.set_footer(text=label)
+            await message.edit(embed=embed, view=None)
             return
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.green() if approved else discord.Color.red()
-        embed.set_footer(text=label)
-        await interaction.message.edit(embed=embed, view=None)
+        # V2 application: rebuild container without controls, with status label
+        text = _collect_text(message.components)
+        # strip old status line
+        body_lines = [l for l in text.split("\n") if not l.startswith("-# ⏳")]
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay("\n".join(body_lines)),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"-# {label}"),
+            accent_color=0x2ECC71 if approved else 0xE74C3C,
+        ))
+        await message.edit(view=view)
 
     # ─── on_member_join ────────────────────────────────────────────────────
     @commands.Cog.listener()
@@ -889,14 +975,23 @@ class AuthCog(commands.Cog):
             ephemeral=True,
         )
 
-        e = discord.Embed(title="🔵 Исключение из команды", color=0x3498DB,
-                          timestamp=discord.utils.utcnow())
-        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
-        e.add_field(name="Исключил", value=str(interaction.user), inline=True)
-        if reason:
-            e.add_field(name="Причина", value=reason, inline=False)
-        e.add_field(name="Сняты роли", value=removed_names, inline=False)
-        await self._log_event(interaction.guild, e)
+        body = (
+            "## 🔵 Исключение из команды\n"
+            f"**Участник:** {member.mention} (`{member.id}`)\n"
+            f"**Исключил:** {interaction.user}\n"
+            + (f"**Причина:** {reason}\n" if reason else "")
+            + f"**Сняты роли:** {removed_names}"
+        )
+        log_view = discord.ui.LayoutView(timeout=None)
+        log_view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(body),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# <t:{int(discord.utils.utcnow().timestamp())}:f>"
+            ),
+            accent_color=0x3498DB,
+        ))
+        await self._log_event(interaction.guild, log_view)
 
 
     # ─── /promote ─────────────────────────────────────────────────────────
@@ -992,12 +1087,21 @@ class AuthCog(commands.Cog):
         except discord.Forbidden:
             pass
 
-        e = discord.Embed(title="📋 Смена звания", color=0x9B59B6,
-                          timestamp=discord.utils.utcnow())
-        e.add_field(name="Участник", value=f"{member.mention} (`{member.id}`)", inline=True)
-        e.add_field(name="Звание", value=change, inline=True)
-        e.add_field(name="Изменил", value=str(interaction.user), inline=False)
-        await self._log_event(guild, e)
+        log_view = discord.ui.LayoutView(timeout=None)
+        log_view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## 📋 Смена звания\n"
+                f"**Участник:** {member.mention} (`{member.id}`)\n"
+                f"**Звание:** {change}\n"
+                f"**Изменил:** {interaction.user}"
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                f"-# <t:{int(discord.utils.utcnow().timestamp())}:f>"
+            ),
+            accent_color=0x9B59B6,
+        ))
+        await self._log_event(guild, log_view)
 
 
 async def setup(bot: commands.Bot):
