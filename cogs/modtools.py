@@ -138,7 +138,7 @@ class ModToolsCog(commands.Cog):
                 (uid, month_ts),
             ).fetchall()
 
-        d = counts(day_ts); w = counts(week_ts); m = counts(month_ts)
+        d = counts(day_ts); w = counts(week_ts); m = counts(month_ts); a = counts(0)
         type_names = {"proof": "📋 Proof", "banform": "⚖️ Бан-формы", "gbanform": "🌐 Гбан-формы"}
         type_lines = "\n".join(
             f"{type_names.get(r['form_type'], r['form_type'])}: **{r['cnt']}**" for r in by_type
@@ -147,7 +147,8 @@ class ModToolsCog(commands.Cog):
         body = (
             f"**Сегодня:** 📨 {d[0]} | ✅ {d[1]} | ❌ {d[2]}\n"
             f"**Неделя:** 📨 {w[0]} | ✅ {w[1]} | ❌ {w[2]}\n"
-            f"**Месяц:** 📨 {m[0]} | ✅ {m[1]} | ❌ {m[2]}\n\n"
+            f"**Месяц:** 📨 {m[0]} | ✅ {m[1]} | ❌ {m[2]}\n"
+            f"**Всё время:** 📨 {a[0]} | ✅ {a[1]} | ❌ {a[2]}\n\n"
             f"**По типам (месяц):**\n{type_lines}"
         )
         view = _simple_v2(

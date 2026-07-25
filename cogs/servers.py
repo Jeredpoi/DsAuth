@@ -1104,7 +1104,7 @@ class ServersCog(commands.Cog):
         )
         view.message = await interaction.original_response()
 
-    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.default_permissions(manage_roles=True)
     @app_commands.command(name="listmods", description="Список модераторов по серверам")
     async def listmods_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

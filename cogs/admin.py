@@ -5,7 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import db
-from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg, RULES, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME
+from helpers import save_config, DEFAULT_TEMPLATE, get_guild_cfg, RULES, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME, perms_for_rank
 
 START_TIME = time.time()
 
@@ -349,8 +349,6 @@ class AdminCog(commands.Cog):
 
         # ── 1. Роли авторизации ────────────────────────────────────────────
         async def _create_roles():
-            mod_perms = discord.Permissions(manage_messages=True)
-
             unverified = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
             if not unverified:
                 await guild.create_role(
@@ -366,19 +364,20 @@ class AdminCog(commands.Cog):
                         reason="deploy: роль высшего руководства",
                     )
             for rank in RANKS:
+                rank_perms = perms_for_rank(rank)
                 existing = discord.utils.get(guild.roles, name=rank)
                 if not existing:
                     await guild.create_role(
                         name=rank, color=discord.Color.blue(), hoist=True,
-                        permissions=mod_perms,
+                        permissions=rank_perms,
                         reason="deploy: роль должности",
                     )
                 else:
                     edits: dict = {}
                     if not existing.hoist:
                         edits["hoist"] = True
-                    if not existing.permissions.manage_messages:
-                        edits["permissions"] = discord.Permissions(existing.permissions.value | mod_perms.value)
+                    if (existing.permissions.value & rank_perms.value) != rank_perms.value:
+                        edits["permissions"] = discord.Permissions(existing.permissions.value | rank_perms.value)
                     if edits:
                         try:
                             await existing.edit(**edits, reason="deploy: обновление прав роли")

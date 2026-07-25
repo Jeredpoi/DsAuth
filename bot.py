@@ -47,7 +47,6 @@ async def main():
             "cogs.admin",
             "cogs.auth",
             "cogs.servers",
-            "cogs.stats",
             "cogs.info",
             "cogs.context_menus",
             "cogs.modtools",

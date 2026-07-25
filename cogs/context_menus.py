@@ -61,6 +61,8 @@ class ContextMenuCog(commands.Cog):
             name="📋 Выдать наказание",
             callback=self._proof_context_callback,
         )
+        # Без этого пункт меню виден всем участникам сервера, а не только модерации
+        self._proof_menu.default_permissions = discord.Permissions(manage_messages=True)
         self.bot.tree.add_command(self._proof_menu)
 
     async def cog_unload(self):

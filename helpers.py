@@ -186,6 +186,21 @@ LEADERSHIP_RANKS: frozenset[str] = frozenset({
 UNVERIFIED_ROLE_NAME = "Не авторизован"
 
 
+def perms_for_rank(rank: str) -> discord.Permissions:
+    """Discord-права для ранговой роли.
+
+    Discord скрывает слэш-команду от участника, у которого нет права,
+    указанного в её default_permissions. Поэтому права роли — это и есть
+    рычаг видимости команд:
+
+      manage_messages — базовый набор модератора (/proof, /warns, /myforms …)
+      manage_roles    — дополнительно для руководства КМ+ (/promote, /transfer …)
+    """
+    if rank in LEADERSHIP_RANKS:
+        return discord.Permissions(manage_messages=True, manage_roles=True)
+    return discord.Permissions(manage_messages=True)
+
+
 def get_member_rank_level(member: discord.Member) -> int:
     return max((RANK_LEVELS.get(r.name, 0) for r in member.roles), default=0)
 

@@ -4,7 +4,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import timedelta
 
-from helpers import save_config, get_guild_cfg, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME, get_member_rank_level
+from helpers import save_config, get_guild_cfg, RANKS, RANK_LEVELS, UNVERIFIED_ROLE_NAME, get_member_rank_level, perms_for_rank
 from cogs.servers import is_server_role, get_monitoring_channel
 import db
 
@@ -499,18 +499,19 @@ class AuthCog(commands.Cog):
         mod_perms = discord.Permissions(manage_messages=True)
         rank_role = None
         if rank:
+            rank_perms = perms_for_rank(rank)
             rank_role = discord.utils.get(guild.roles, name=rank)
             if not rank_role:
                 rank_role = await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
-                    permissions=mod_perms,
+                    permissions=rank_perms,
                     reason="Автосоздание роли авторизации",
                 )
-            elif not rank_role.permissions.manage_messages:
+            elif (rank_role.permissions.value & rank_perms.value) != rank_perms.value:
                 try:
                     await rank_role.edit(
-                        permissions=discord.Permissions(rank_role.permissions.value | mod_perms.value),
-                        reason="Обновление: добавление manage_messages",
+                        permissions=discord.Permissions(rank_role.permissions.value | rank_perms.value),
+                        reason="Обновление прав ранговой роли",
                     )
                 except discord.Forbidden:
                     pass
@@ -781,16 +782,16 @@ class AuthCog(commands.Cog):
                 reason="Системная роль авторизации",
             )
 
-        # manage_messages lets Discord hide moderator-only slash commands from regular members
-        mod_perms = discord.Permissions(manage_messages=True)
-
+        # Права роли управляют видимостью слэш-команд: manage_messages —
+        # базовые команды модератора, manage_roles — команды руководства (КМ+)
         created_roles = []
         for rank in RANKS:
+            rank_perms = perms_for_rank(rank)
             existing = discord.utils.get(guild.roles, name=rank)
             if not existing:
                 await guild.create_role(
                     name=rank, color=RANK_COLOR, hoist=True,
-                    permissions=mod_perms,
+                    permissions=rank_perms,
                     reason="Автосоздание ролей авторизации",
                 )
                 created_roles.append(rank)
@@ -798,8 +799,8 @@ class AuthCog(commands.Cog):
                 edits: dict = {}
                 if not existing.hoist:
                     edits["hoist"] = True
-                if not existing.permissions.manage_messages:
-                    edits["permissions"] = discord.Permissions(existing.permissions.value | mod_perms.value)
+                if (existing.permissions.value & rank_perms.value) != rank_perms.value:
+                    edits["permissions"] = discord.Permissions(existing.permissions.value | rank_perms.value)
                 if edits:
                     try:
                         await existing.edit(**edits, reason="Обновление роли авторизации")
@@ -906,7 +907,7 @@ class AuthCog(commands.Cog):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     # ─── /dismiss ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.default_permissions(manage_roles=True)
     @app_commands.command(name="dismiss", description="Исключить модератора по собственному желанию")
     @app_commands.describe(
         member="Модератор, покидающий команду",
@@ -995,7 +996,7 @@ class AuthCog(commands.Cog):
 
 
     # ─── /promote ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.default_permissions(manage_roles=True)
     @app_commands.command(name="promote", description="Изменить звание модератора")
     @app_commands.describe(member="Модератор", rank="Новое звание")
     @app_commands.choices(rank=[app_commands.Choice(name=r, value=r) for r in RANKS])
@@ -1023,20 +1024,20 @@ class AuthCog(commands.Cog):
         old_rank_roles = [r for r in member.roles if r.name in RANKS]
         old_rank = old_rank_roles[0].name if old_rank_roles else None
 
-        # Создаём новую роль если нет (с manage_messages чтобы команды были видны)
-        _mod_perms = discord.Permissions(manage_messages=True)
+        # Создаём новую роль если нет (права роли = видимость команд для ранга)
+        _rank_perms = perms_for_rank(rank)
         rank_role = discord.utils.get(guild.roles, name=rank)
         if not rank_role:
             rank_role = await guild.create_role(
                 name=rank, color=RANK_COLOR, hoist=True,
-                permissions=_mod_perms,
+                permissions=_rank_perms,
                 reason="Автосоздание роли при смене звания",
             )
-        elif not rank_role.permissions.manage_messages:
+        elif (rank_role.permissions.value & _rank_perms.value) != _rank_perms.value:
             try:
                 await rank_role.edit(
-                    permissions=discord.Permissions(rank_role.permissions.value | _mod_perms.value),
-                    reason="Обновление: добавление manage_messages",
+                    permissions=discord.Permissions(rank_role.permissions.value | _rank_perms.value),
+                    reason="Обновление прав ранговой роли",
                 )
             except discord.Forbidden:
                 pass
