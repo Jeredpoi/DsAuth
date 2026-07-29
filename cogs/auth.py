@@ -907,7 +907,7 @@ class AuthCog(commands.Cog):
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     # ─── /dismiss ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="dismiss", description="Исключить модератора по собственному желанию")
     @app_commands.describe(
         member="Модератор, покидающий команду",
@@ -996,7 +996,7 @@ class AuthCog(commands.Cog):
 
 
     # ─── /promote ─────────────────────────────────────────────────────────
-    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.command(name="promote", description="Изменить звание модератора")
     @app_commands.describe(member="Модератор", rank="Новое звание")
     @app_commands.choices(rank=[app_commands.Choice(name=r, value=r) for r in RANKS])

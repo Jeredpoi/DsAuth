@@ -1,5 +1,4 @@
 import re
-from collections import OrderedDict
 from datetime import datetime, timedelta
 
 import discord
@@ -15,6 +14,9 @@ from cogs.servers import get_proof_channel, get_banform_channel, get_log_channel
 from db import record_form, all_user_servers
 
 REMINDER_HOURS = 2
+
+# Discord MediaGallery вмещает до 10 элементов
+MAX_EVIDENCE = 10
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -256,7 +258,7 @@ def _make_layout_view(
     )
 
     if evidence_urls:
-        gallery_items = [discord.MediaGalleryItem(u) for u in evidence_urls[:4]]
+        gallery_items = [discord.MediaGalleryItem(u) for u in evidence_urls[:MAX_EVIDENCE]]
         container_items.append(discord.ui.MediaGallery(*gallery_items))
 
     view = discord.ui.LayoutView(timeout=None)
@@ -401,7 +403,6 @@ def _rebuild_view_from_message(
         form_type=form_type,
         done=done,
     )
-    _wire_callbacks(view)
     return view
 
 
@@ -586,8 +587,8 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
 
         existing = _extract_evidence_urls(self.proof_message.components)
         merged   = list(dict.fromkeys(existing + new_urls))
-        capped   = len(merged) > 4
-        combined = merged[:4]  # Discord MediaGallery max 4 items
+        capped   = len(merged) > MAX_EVIDENCE
+        combined = merged[:MAX_EVIDENCE]
 
         new_view = _rebuild_form_view(self.proof_message, combined)
         try:
@@ -599,7 +600,7 @@ class AddEvidenceModal(discord.ui.Modal, title="Добавить доказат�
                 ephemeral=True,
             )
             return
-        note = " (максимум 4, лишние отброшены)" if capped else ""
+        note = f" (максимум {MAX_EVIDENCE}, лишние отброшены)" if capped else ""
         await interaction.followup.send(
             f"✅ Доказательства добавлены ({len(combined)} шт.){note}.", ephemeral=True
         )
@@ -630,7 +631,7 @@ class RemoveEvidenceModal(discord.ui.Modal, title="Убрать доказате
             nums = {int(n) for n in re.findall(r"\d+", raw)}
             if not nums:
                 await interaction.response.send_message(
-                    "❌ Укажите номер доказательства (1–4) или «все».", ephemeral=True
+                    f"❌ Укажите номер доказательства (1–{MAX_EVIDENCE}) или «все».", ephemeral=True
                 )
                 return
             remaining = [u for i, u in enumerate(existing, 1) if i not in nums]
@@ -683,6 +684,10 @@ class EditFormModal(discord.ui.Modal, title="Редактировать форм
         rule_id    = self.rule_input.value.strip()
         punishment = self.punishment_input.value.strip()
 
+        old_data       = _extract_v2_data(self.proof_message)
+        old_rule       = old_data.get("rule_id", "")
+        old_punishment = old_data.get("punishment", "")
+
         new_form_type = _form_type_from_punishment(punishment)
         min_level     = APPROVE_MIN_RANK.get(new_form_type, 2)
 
@@ -708,10 +713,20 @@ class EditFormModal(discord.ui.Modal, title="Редактировать форм
             except discord.HTTPException as e:
                 await interaction.followup.send(f"❌ Не удалось обновить форму: {e}", ephemeral=True)
                 return
+            await _log_form_edit(
+                interaction, old_data, self.proof_message,
+                old_rule=old_rule, new_rule=rule_id,
+                old_punishment=old_punishment, new_punishment=punishment,
+            )
             await interaction.followup.send("✅ Форма обновлена.", ephemeral=True)
         else:
             # Author doesn't have the rank to self-approve this punishment type:
             # move the form to the correct channel with approval buttons.
+            await _log_form_edit(
+                interaction, old_data, self.proof_message,
+                old_rule=old_rule, new_rule=rule_id,
+                old_punishment=old_punishment, new_punishment=punishment,
+            )
             await _escalate_form(
                 interaction, self.proof_message,
                 rule_id=rule_id, punishment=punishment, evidence_urls=evidence,
@@ -782,6 +797,57 @@ async def _escalate_form(
     )
 
 
+async def _log_form_edit(
+    interaction: discord.Interaction,
+    data: dict,
+    proof_message: discord.Message,
+    old_rule: str,
+    new_rule: str,
+    old_punishment: str,
+    new_punishment: str,
+) -> None:
+    """Пишем в лог факт правки формы.
+
+    Удаление, одобрение и отклонение логировались, а изменение пункта
+    правил и наказания — нет. Из-за этого наказание можно было тихо
+    переписать задним числом, не оставив следа.
+    """
+    if old_rule == new_rule and old_punishment == new_punishment:
+        return  # ничего не изменилось
+    if not interaction.guild:
+        return
+    server = server_for_channel(interaction.guild, interaction.client.cfg, proof_message.channel.id)
+    if not server:
+        return
+    log_ch = get_log_channel(interaction.guild, interaction.client.cfg, server)
+    if not log_ch:
+        return
+
+    changes = []
+    if old_rule != new_rule:
+        changes.append(f"**Пункт правил:** ~~{old_rule or '—'}~~ → **{new_rule}**")
+    if old_punishment != new_punishment:
+        changes.append(f"**Наказание:** ~~{old_punishment or '—'}~~ → **{new_punishment}**")
+
+    user_id = data.get("user_id", 0)
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("## ✏️ Форма изменена"),
+        discord.ui.Separator(),
+        discord.ui.TextDisplay(
+            f"**Нарушитель:** {f'<@{user_id}>' if user_id else '?'}\n"
+            f"**Изменил:** {interaction.user}\n"
+            + "\n".join(changes)
+        ),
+        discord.ui.TextDisplay(f"-# <t:{int(discord.utils.utcnow().timestamp())}:f>"),
+        accent_color=0xF39C12,
+    ))
+    try:
+        await log_ch.send(view=view)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
 async def _log_form_deletion(
     interaction: discord.Interaction,
     data: dict,
@@ -823,12 +889,6 @@ async def _log_form_deletion(
 
 
 # ─── Button callbacks ─────────────────────────────────────────────────────────
-
-def _wire_callbacks(view: discord.ui.LayoutView) -> None:
-    # All punishment:* buttons are handled by ProofCog.on_interaction.
-    # This function is intentionally a no-op; kept for call-site compatibility.
-    pass
-
 
 async def _manage_callback(interaction: discord.Interaction):
     data      = _extract_v2_data(interaction.message)
@@ -1013,49 +1073,6 @@ async def _reject_callback(interaction: discord.Interaction):
     await interaction.followup.send("❌ Форма отклонена.", ephemeral=True)
 
 
-# ─── PunishmentLayoutView (persistent registration) ──────────────────────────
-
-class PunishmentLayoutView(discord.ui.LayoutView):
-    """Registered once at startup so discord.py can dispatch button interactions."""
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        btns = [
-            discord.ui.Button(label="⚙️ Управление",    style=discord.ButtonStyle.secondary, custom_id="punishment:manage"),
-            discord.ui.Button(label="Доказательства",   style=discord.ButtonStyle.secondary, custom_id="punishment:evidence", emoji="🔗"),
-            discord.ui.Button(label="✅ Одобрить",       style=discord.ButtonStyle.success,   custom_id="punishment:approve"),
-            discord.ui.Button(label="❌ Отклонить",      style=discord.ButtonStyle.danger,    custom_id="punishment:reject"),
-        ]
-        callbacks = [_manage_callback, _evidence_callback, _approve_callback, _reject_callback]
-        for btn, cb in zip(btns, callbacks):
-            btn.callback = cb
-
-        # Wrap in a minimal container so walk_children() works
-        container = discord.ui.Container(
-            discord.ui.Section(
-                discord.ui.TextDisplay("## Форма наказания\n**Модератор:** —"),
-                accessory=btns[0],
-            ),
-            discord.ui.Separator(),
-            discord.ui.Section(
-                discord.ui.TextDisplay("..."),
-                accessory=btns[1],
-            ),
-            discord.ui.Separator(),
-            discord.ui.Section(
-                discord.ui.TextDisplay("-# Одобрить"),
-                accessory=btns[2],
-            ),
-            discord.ui.Section(
-                discord.ui.TextDisplay("-# Отклонить"),
-                accessory=btns[3],
-            ),
-            accent_color=0x3498DB,
-        )
-        self.add_item(container)
-
-
 # ─── Post form ────────────────────────────────────────────────────────────────
 
 def _resolve_server(member: discord.Member, cfg: dict, server_override: str | None) -> tuple[str | None, str | None]:
@@ -1211,31 +1228,45 @@ async def _post_form(
         ]
         if ensure_error:
             diag_lines.append(f"`ensure_error={ensure_error}`")
-        diag = "\n-# ".join(diag_lines)
-        await interaction.followup.send(
+
+        # Полный дамп нужен только владельцу — рядовому модератору он ничего
+        # не говорит, а сообщение раздувает на пол-экрана. В консоль пишем всегда.
+        print(f"[proof] канал не найден: " + " | ".join(diag_lines))
+        owner_id = getattr(interaction.client, "owner_id_cfg", 0)
+        guild_owner_id = interaction.guild.owner_id if interaction.guild else 0
+        show_diag = interaction.user.id in (owner_id, guild_owner_id)
+
+        msg = (
             f"❌ Канал форм {ch_label} не найден (сервер **{server}**).\n"
-            f"Привяжите существующий канал: `/linkserver server:{server} "
-            f"{'banform' if is_ban else 'proof'}:#канал`\n"
-            f"Или создайте новые каналы: `/setupserver {server}`\n"
-            f"-# {diag}",
-            ephemeral=True,
+            f"-# Обратитесь к администратору — нужно привязать канал "
+            f"(`/linkserver`) или создать заново (`/setupserver {server}`)."
         )
+        if show_diag:
+            msg += "\n-# " + "\n-# ".join(diag_lines)
+        await interaction.followup.send(msg, ephemeral=True)
         return
+
+    # Если ранг автора и так позволяет выдать это наказание — форма не уходит
+    # на одобрение. Та же логика уже действовала при смене наказания через
+    # ✏️ Редактировать, но не при создании формы командой — из-за этого один
+    # и тот же СМ получал разное поведение в зависимости от пути.
+    min_level     = APPROVE_MIN_RANK.get(form_type, 2)
+    self_approved = get_member_rank_level(actor) >= min_level if getattr(actor, "roles", None) else False
+    layout_form_type = "proof" if self_approved else form_type
 
     title      = _punishment_title(punishment)
     color      = _punishment_color(punishment)
     h_text     = _build_header_text(title, moderator.id)
     # Support multiple space-separated URLs in evidence_url
     ev_urls    = [u.strip() for u in evidence_url.split() if u.strip().startswith("http")] if evidence_url else []
-    f_text     = _build_fields_text(violator.id, rule_id, punishment, form_type,
+    f_text     = _build_fields_text(violator.id, rule_id, punishment, layout_form_type,
                                      violator_name=violator.name)
     avatar_url = str(violator.display_avatar.url) if violator.display_avatar else ""
 
     layout_view = _make_layout_view(
         h_text, f_text, ev_urls, color,
-        violator_avatar_url=avatar_url, form_type=form_type,
+        violator_avatar_url=avatar_url, form_type=layout_form_type,
     )
-    _wire_callbacks(layout_view)
 
     try:
         await proof_ch.send(view=layout_view)
@@ -1259,8 +1290,15 @@ async def _post_form(
 
     # Текст для отчёта больше не шлём в ЛС (копился мусор) —
     # он доступен в любой момент: ⚙️ Управление → 📋 Текст для отчёта
+    if not self_approved and form_type in ("banform", "gbanform"):
+        status_hint = f"-# ⏳ Ожидает одобрения: **{RANKS[min_level - 1]}+**\n"
+    elif self_approved and form_type in ("banform", "gbanform"):
+        status_hint = "-# ✅ Одобрение не требуется — ваш ранг позволяет выдать это наказание\n"
+    else:
+        status_hint = ""
     await interaction.followup.send(
         f"✅ Отправлено в {proof_ch.mention} (сервер **{server}**)!\n"
+        f"{status_hint}"
         f"-# 📋 Текст для отчёта: кнопка **⚙️ Управление** на форме",
         ephemeral=True,
     )
@@ -1284,7 +1322,6 @@ def _combine_evidence(*attachments_and_url) -> str:
 class ProofCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._reminded: OrderedDict[int, None] = OrderedDict()
         self.reminder_loop.start()
 
     def cog_unload(self):
@@ -1309,11 +1346,14 @@ class ProofCog(commands.Cog):
                         channels_to_check.append(ch)
                         seen_ids.add(ch.id)
 
-        # FIFO prune — drop oldest entries first (OrderedDict preserves insertion order)
-        while len(self._reminded) > 10_000:
-            self._reminded.popitem(last=False)
-
         cutoff = now - timedelta(days=7)
+
+        # Список «уже напомнено» живёт в SQLite: после рестарта бот не должен
+        # заново пинговать руководство по всем висящим формам
+        from db import load_reminded_forms, mark_form_reminded, prune_reminded_forms
+        prune_reminded_forms(int(cutoff.timestamp()))
+        reminded = load_reminded_forms()
+
         for ch in channels_to_check:
             guild_cfg = get_guild_cfg(cfg, ch.guild.id)
             role_id = guild_cfg.get("review_role_id", 0)
@@ -1323,7 +1363,7 @@ class ProofCog(commands.Cog):
             try:
                 # No limit — scan all messages in the 7-day window, not just the first 100
                 async for msg in ch.history(limit=None, after=cutoff, oldest_first=True):
-                    if msg.id in self._reminded:
+                    if msg.id in reminded:
                         continue
                     if not _is_pending_v2_message(msg):
                         continue
@@ -1345,8 +1385,9 @@ class ProofCog(commands.Cog):
                             )
                         except (discord.Forbidden, discord.HTTPException):
                             continue
-                        # Mark as reminded only after successful send
-                        self._reminded[msg.id] = None
+                        # Отмечаем только после успешной отправки
+                        mark_form_reminded(msg.id)
+                        reminded.add(msg.id)
             except (discord.Forbidden, discord.HTTPException):
                 pass
 

@@ -288,8 +288,9 @@ class AdminCog(commands.Cog):
 
         PERM_LABELS = {
             "administrator":   "🔴 Только администратор",
-            "manage_roles":    "🟠 Управление ролями (руководство)",
-            "manage_messages": "🟡 Управление сообщениями (модераторы)",
+            "manage_guild":    "⭐ Управление сервером (ЗГМ, ГМ)",
+            "manage_roles":    "🟠 Управление ролями (КМ и выше)",
+            "manage_messages": "🟡 Управление сообщениями (все модераторы)",
             None:              "🟢 Все участники",
         }
         groups: dict[str, list[str]] = {k: [] for k in PERM_LABELS}
@@ -300,6 +301,8 @@ class AdminCog(commands.Cog):
                 key = None
             elif dmp.administrator:
                 key = "administrator"
+            elif dmp.manage_guild:
+                key = "manage_guild"
             elif dmp.manage_roles:
                 key = "manage_roles"
             elif dmp.manage_messages:

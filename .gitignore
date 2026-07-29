@@ -8,3 +8,6 @@ config.json
 stats.json
 stats.json.bak
 bot_data.db
+config.json.bak
+config.json.tmp
+config.json.corrupt

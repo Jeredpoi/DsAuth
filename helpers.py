@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from datetime import datetime, timedelta
 
 import discord
@@ -83,25 +84,7 @@ DEFAULT_GUILD_CFG: dict = {
 }
 
 
-def load_config() -> dict:
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        data.setdefault("moderator_nick", DEFAULT_CONFIG["moderator_nick"])
-        data.setdefault("home_guild_id", DEFAULT_CONFIG["home_guild_id"])
-        data.setdefault("templates", DEFAULT_CONFIG["templates"].copy())
-        data.setdefault("guilds", {})
-        for k, v in DEFAULT_CONFIG["templates"].items():
-            data["templates"].setdefault(k, v)
-        for rule_id, rule_text in data.get("rules", {}).items():
-            RULES[rule_id] = rule_text
-        # Собираем user_servers из guild-конфигов для последующей миграции в SQLite
-        merged = data.pop("user_servers", {})
-        for g_cfg in data["guilds"].values():
-            for uid, srv in g_cfg.pop("user_servers", {}).items():
-                merged.setdefault(uid, srv)
-        data["user_servers"] = merged   # bot.py передаст это в migrate_from_json
-        return data
+def _default_config() -> dict:
     return {
         "moderator_nick": DEFAULT_CONFIG["moderator_nick"],
         "templates": DEFAULT_CONFIG["templates"].copy(),
@@ -110,16 +93,91 @@ def load_config() -> dict:
     }
 
 
+def _normalize_config(data: dict) -> dict:
+    data.setdefault("moderator_nick", DEFAULT_CONFIG["moderator_nick"])
+    data.setdefault("home_guild_id", DEFAULT_CONFIG["home_guild_id"])
+    data.setdefault("templates", DEFAULT_CONFIG["templates"].copy())
+    data.setdefault("guilds", {})
+    for k, v in DEFAULT_CONFIG["templates"].items():
+        data["templates"].setdefault(k, v)
+    for rule_id, rule_text in data.get("rules", {}).items():
+        RULES[rule_id] = rule_text
+    # Собираем user_servers из guild-конфигов для последующей миграции в SQLite
+    merged = data.pop("user_servers", {})
+    for g_cfg in data["guilds"].values():
+        for uid, srv in g_cfg.pop("user_servers", {}).items():
+            merged.setdefault(uid, srv)
+    data["user_servers"] = merged   # bot.py передаст это в migrate_from_json
+    return data
+
+
+def load_config() -> dict:
+    """Читает config.json, при повреждении откатывается на резервную копию.
+
+    Файл может оказаться обрезанным, если процесс убили посреди записи —
+    на Replit это штатная ситуация. Раньше это означало JSONDecodeError на
+    уровне импорта bot.py, то есть бот не поднимался вообще. Теперь битый
+    файл откладывается в .corrupt, и мы пробуем .bak, а в самом худшем
+    случае стартуем с настроек по умолчанию.
+    """
+    for path in (CONFIG_PATH, CONFIG_PATH + ".bak"):
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            print(f"⚠️  Конфиг {path} повреждён: {e}")
+            if path == CONFIG_PATH:
+                try:
+                    os.replace(path, CONFIG_PATH + ".corrupt")
+                    print(f"   Повреждённый файл сохранён как {CONFIG_PATH}.corrupt")
+                except OSError:
+                    pass
+            continue
+        if not isinstance(data, dict):
+            print(f"⚠️  Конфиг {path} имеет неверный формат — пропускаю")
+            continue
+        if path.endswith(".bak"):
+            print(f"✅ Конфиг восстановлен из резервной копии {path}")
+        return _normalize_config(data)
+    print("ℹ️  Конфиг не найден — стартую с настроек по умолчанию")
+    return _default_config()
+
+
+def save_config(data: dict):
+    """Атомарная запись конфига.
+
+    Пишем во временный файл, сбрасываем на диск и подменяем через
+    os.replace — он атомарен на уровне файловой системы. Поэтому
+    config.json в любой момент либо целиком старый, либо целиком новый,
+    но никогда не обрезанный. Предыдущая версия остаётся как .bak.
+    """
+    to_save = {k: v for k, v in data.items() if k != "user_servers"}
+    tmp_path = CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(to_save, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(CONFIG_PATH):
+            try:
+                shutil.copy2(CONFIG_PATH, CONFIG_PATH + ".bak")
+            except OSError:
+                pass
+        os.replace(tmp_path, CONFIG_PATH)
+    except OSError as e:
+        print(f"⚠️  Не удалось сохранить конфиг: {e}")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
 def get_guild_cfg(cfg: dict, guild_id: int) -> dict:
     key = str(guild_id)
     cfg["guilds"].setdefault(key, DEFAULT_GUILD_CFG.copy())
     return cfg["guilds"][key]
-
-
-def save_config(data: dict):
-    to_save = {k: v for k, v in data.items() if k != "user_servers"}
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(to_save, f, indent=2, ensure_ascii=False)
 
 
 def fmt_date(dt: datetime) -> str:
@@ -186,6 +244,13 @@ LEADERSHIP_RANKS: frozenset[str] = frozenset({
 UNVERIFIED_ROLE_NAME = "Не авторизован"
 
 
+# Ранги, которые распоряжаются составом команды (совпадает с AUTH_MIN_LEVEL)
+TOP_RANKS: frozenset[str] = frozenset({
+    "Заместитель главного модератора",
+    "Главный модератор",
+})
+
+
 def perms_for_rank(rank: str) -> discord.Permissions:
     """Discord-права для ранговой роли.
 
@@ -193,9 +258,16 @@ def perms_for_rank(rank: str) -> discord.Permissions:
     указанного в её default_permissions. Поэтому права роли — это и есть
     рычаг видимости команд:
 
-      manage_messages — базовый набор модератора (/proof, /warns, /myforms …)
-      manage_roles    — дополнительно для руководства КМ+ (/promote, /transfer …)
+      manage_messages — база модератора    (/proof, /warns, /myforms …)
+      manage_roles    — руководство КМ+    (/transfer, /inactive, /listmods …)
+      manage_guild    — верхушка ЗГМ+      (/promote, /dismiss)
+
+    Три уровня вместо двух нужны, чтобы видимость совпадала с реальными
+    правами: /promote и /dismiss внутри требуют ЗГМ+, и Куратор модерации
+    не должен видеть команды, которые всё равно ему откажут.
     """
+    if rank in TOP_RANKS:
+        return discord.Permissions(manage_messages=True, manage_roles=True, manage_guild=True)
     if rank in LEADERSHIP_RANKS:
         return discord.Permissions(manage_messages=True, manage_roles=True)
     return discord.Permissions(manage_messages=True)

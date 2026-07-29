@@ -62,6 +62,13 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_reminders_at ON reminders(remind_at);
+
+        CREATE TABLE IF NOT EXISTS reminded_forms (
+            message_id INTEGER PRIMARY KEY,
+            ts         INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reminded_forms_ts ON reminded_forms(ts);
         """)
         # Новые колонки form_stats — для /warns и /checkuser (история по нарушителю)
         for col, decl in (
@@ -251,6 +258,33 @@ def list_reminders(user_id: int) -> list[dict]:
             (user_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ─── напоминания по висящим формам ────────────────────────────────────────────
+
+def load_reminded_forms() -> set[int]:
+    """ID форм, по которым руководству уже пинговали.
+
+    Раньше этот список жил только в памяти, поэтому после каждого рестарта
+    бот заново пинговал по всем висящим формам.
+    """
+    with _conn() as c:
+        rows = c.execute("SELECT message_id FROM reminded_forms").fetchall()
+        return {r["message_id"] for r in rows}
+
+
+def mark_form_reminded(message_id: int):
+    with _conn() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO reminded_forms (message_id, ts) VALUES (?, ?)",
+            (message_id, int(time.time())),
+        )
+
+
+def prune_reminded_forms(before_ts: int):
+    """Чистим записи старше окна напоминаний, чтобы таблица не росла вечно."""
+    with _conn() as c:
+        c.execute("DELETE FROM reminded_forms WHERE ts < ?", (before_ts,))
 
 
 def get_stats(mod_id: int, since_ts: int = 0) -> dict:
