@@ -14,6 +14,11 @@ DB_PATH = "bot_data.db"
 def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10.0)
     c.row_factory = sqlite3.Row
+    # В режиме WAL synchronous=NORMAL не ждёт fsync на каждой транзакции.
+    # Падение процесса (а Replit убивает именно процесс) это переживает —
+    # рискует только последняя транзакция при отключении питания. Взамен
+    # запись ускоряется на два порядка, что заметно на медленном диске.
+    c.execute("PRAGMA synchronous=NORMAL")
     return c
 
 

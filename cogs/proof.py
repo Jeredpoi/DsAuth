@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import datetime, timedelta
 
@@ -17,6 +18,12 @@ REMINDER_HOURS = 2
 
 # Discord MediaGallery вмещает до 10 элементов
 MAX_EVIDENCE = 10
+
+# Сколько сообщений разбираем в одном канале за проход и сколько ждём между
+# каналами — чтобы фоновое сканирование не занимало очередь рейт-лимита,
+# в которой стоят ответы на нажатия кнопок
+SCAN_LIMIT = 200
+SCAN_DELAY = 1.0
 
 
 # ─── Autocomplete ─────────────────────────────────────────────────────────────
@@ -1354,15 +1361,21 @@ class ProofCog(commands.Cog):
         prune_reminded_forms(int(cutoff.timestamp()))
         reminded = load_reminded_forms()
 
-        for ch in channels_to_check:
+        for idx, ch in enumerate(channels_to_check):
             guild_cfg = get_guild_cfg(cfg, ch.guild.id)
             role_id = guild_cfg.get("review_role_id", 0)
             mention = f"<@&{role_id}>" if role_id else ""
             if not mention:
                 continue  # skip reminder if no role configured — pinging nobody is useless
+            # Разносим каналы во времени: раньше сотни REST-запросов уходили
+            # одной пачкой и забивали очередь рейт-лимита, из-за чего ответы
+            # на нажатия кнопок ждали за ними и упирались в 3-секундный лимит
+            if idx:
+                await asyncio.sleep(SCAN_DELAY)
             try:
-                # No limit — scan all messages in the 7-day window, not just the first 100
-                async for msg in ch.history(limit=None, after=cutoff, oldest_first=True):
+                # oldest_first — самые старые формы и есть те, о которых напоминаем;
+                # лимит защищает от разбора всей истории активного канала
+                async for msg in ch.history(limit=SCAN_LIMIT, after=cutoff, oldest_first=True):
                     if msg.id in reminded:
                         continue
                     if not _is_pending_v2_message(msg):
@@ -1449,13 +1462,19 @@ class ProofCog(commands.Cog):
             await interaction.response.send_message("❌ Канал не найден.", ephemeral=True)
             return
 
-        try:
-            proof_msg = await ch.fetch_message(msg_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            await interaction.response.send_message(
-                "❌ Форма не найдена (возможно, уже удалена).", ephemeral=True
-            )
-            return
+        # Сначала кэш: у нас всего ~3 секунды на ответ, а REST-запрос в это
+        # окно может не уложиться — тогда Discord показывает «Interaction
+        # failed», и кнопка выглядит несработавшей. Для модалок отложить
+        # ответ через defer() нельзя — модальное окно обязано быть первым.
+        proof_msg = discord.utils.get(interaction.client.cached_messages, id=msg_id)
+        if proof_msg is None:
+            try:
+                proof_msg = await ch.fetch_message(msg_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await interaction.response.send_message(
+                    "❌ Форма не найдена (возможно, уже удалена).", ephemeral=True
+                )
+                return
 
         data      = _extract_v2_data(proof_msg)
         mod_id    = data.get("mod_id", 0)
