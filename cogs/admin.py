@@ -296,7 +296,7 @@ class AdminCog(commands.Cog):
         groups: dict[str, list[str]] = {k: [] for k in PERM_LABELS}
 
         for cmd in sorted(self.bot.tree.get_commands(), key=lambda c: c.name):
-            dmp = cmd.default_member_permissions
+            dmp = cmd.default_permissions
             if dmp is None:
                 key = None
             elif dmp.administrator:
