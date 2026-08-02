@@ -8,6 +8,13 @@ config.json
 stats.json
 stats.json.bak
 bot_data.db
+# служебные файлы SQLite: WAL хранит ещё не сброшенные в базу транзакции,
+# и попадание устаревшей копии из репозитория рассогласует её с bot_data.db
+bot_data.db-wal
+bot_data.db-shm
+*.db-journal
+*.db-wal
+*.db-shm
 config.json.bak
 config.json.tmp
 config.json.corrupt
