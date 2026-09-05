@@ -1,5 +1,6 @@
 import asyncio
 import os
+import signal
 import subprocess
 import traceback
 
@@ -38,10 +39,16 @@ bot.owner_id_cfg = OWNER_ID
 
 async def main():
     async with bot:
-        from keep_alive import start_webserver, self_ping_loop
+        from keep_alive import start_webserver, self_ping_loop, needs_self_ping
+        # HTTP-сервер поднимаем всегда: /health удобен для внешнего мониторинга.
+        # А self-ping нужен только на Replit — на обычном сервере это пустой
+        # трафик к самому себе каждую минуту.
         await start_webserver(bot)
-        _keepalive_task = asyncio.create_task(self_ping_loop())
-        bot._keepalive_task = _keepalive_task  # prevent garbage collection
+        if needs_self_ping():
+            _keepalive_task = asyncio.create_task(self_ping_loop())
+            bot._keepalive_task = _keepalive_task  # prevent garbage collection
+        else:
+            print("   [keepalive] Self-ping не нужен (не Replit) — только /health")
         _exts = [
             "cogs.proof",
             "cogs.admin",
@@ -58,6 +65,25 @@ async def main():
             except Exception as _e:
                 print(f"   ❌ Ошибка загрузки {_ext}: {_e}")
                 traceback.print_exc()
+
+        # systemd при остановке шлёт SIGTERM. Без обработчика процесс умирает
+        # мгновенно, минуя `async with bot`, — без отключения от Discord и без
+        # сброса SQLite. signal.signal() тут не годится: KeyboardInterrupt,
+        # брошенный посреди работающего цикла событий, до asyncio.run не
+        # доходит. Штатный для asyncio способ — add_signal_handler; закрытие
+        # бота заставляет bot.start() вернуть управление.
+        loop = asyncio.get_running_loop()
+
+        def _shutdown(sig_name: str):
+            print(f"\n⏹️  Получен {sig_name} — завершаю работу")
+            loop.create_task(bot.close())
+
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(_sig, _shutdown, _sig.name)
+            except NotImplementedError:
+                pass  # Windows не поддерживает — там сработает KeyboardInterrupt
+
         await bot.start(TOKEN)
 
 
@@ -169,4 +195,7 @@ async def on_error(event: str, *args, **kwargs):
     await _send_error_to_monitoring(f"Ошибка события `{event}`", tb)
 
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    print("\n⏹️  Остановка по Ctrl+C")

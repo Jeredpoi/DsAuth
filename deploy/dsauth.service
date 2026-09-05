@@ -1,0 +1,51 @@
+[Unit]
+Description=DsAuth — Discord-бот модерации Black Russia
+Documentation=https://github.com/Jeredpoi/DsAuth
+# Стартуем только когда есть сеть: без неё вход в Discord всё равно упадёт
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# ── Подставь свои значения ────────────────────────────────────────────────
+User=dsauth
+Group=dsauth
+WorkingDirectory=/opt/dsauth
+ExecStart=/opt/dsauth/.venv/bin/python /opt/dsauth/bot.py
+# ──────────────────────────────────────────────────────────────────────────
+
+# Токен и OWNER_ID берутся отсюда. Файл должен быть chmod 600.
+EnvironmentFile=/opt/dsauth/.env
+
+# Логи не буферизуются, иначе journalctl показывает их с задержкой
+Environment=PYTHONUNBUFFERED=1
+
+# Перезапуск при любом падении, но не чаще 5 раз за минуту —
+# иначе при неверном токене будет бесконечный цикл рестартов
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Даём боту время корректно отключиться от Discord по SIGTERM
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# ── Ограничение прав: боту не нужен доступ ко всей системе ────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Единственный каталог, куда разрешена запись (bot_data.db, config.json)
+ReadWritePaths=/opt/dsauth
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dsauth
+
+[Install]
+WantedBy=multi-user.target

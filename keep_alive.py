@@ -5,18 +5,33 @@ from aiohttp import web
 import aiohttp
 
 
-def _public_url() -> str:
-    """Return the public health-check URL on Replit, or localhost as fallback.
-
-    Replit only counts EXTERNAL requests as activity, so we must ping the
-    public domain rather than localhost when possible.
-    """
+def _replit_domain() -> str | None:
+    """Публичный домен Replit, если бот запущен там."""
     domain = os.getenv("REPLIT_DEV_DOMAIN")
     if not domain:
         slug = os.getenv("REPL_SLUG")
         owner = os.getenv("REPL_OWNER")
         if slug and owner:
             domain = f"{slug}.{owner}.repl.co"
+    return domain
+
+
+def needs_self_ping() -> bool:
+    """Нужен ли self-ping.
+
+    Self-ping — костыль против засыпания Replit: платформа считает
+    активностью только внешние запросы. На обычном сервере (VPS, systemd)
+    бот работает постоянно, и пинг самого себя каждую минуту — пустой
+    трафик. Принудительно включается переменной FORCE_SELF_PING=1.
+    """
+    if os.getenv("FORCE_SELF_PING") == "1":
+        return True
+    return _replit_domain() is not None
+
+
+def _public_url() -> str:
+    """URL для health-check: публичный домен Replit либо localhost."""
+    domain = _replit_domain()
     if domain:
         return f"https://{domain}/health"
     return "http://localhost:8080/health"
