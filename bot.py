@@ -1,402 +1,206 @@
+import asyncio
+import os
+import signal
+import subprocess
+import traceback
+
 import discord
 from discord.ext import commands
-import os
 from dotenv import load_dotenv
+
+from helpers import load_config
+import db
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-
-MEMBER_ROLE_NAME = "Участник"
-AUTH_CATEGORY_NAME = "🔐 Авторизация"
-AUTH_CHANNEL_NAME = "авторизация"
-REVIEW_CHANNEL_NAME = "заявки-на-вход"
+PROXY = os.getenv("PROXY_URL")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# User IDs with active pending requests
-pending: set[int] = set()
-
-
-# ─── Persistent view for the auth button ────────────────────────────────────
-
-class PersistentAuthView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="🔐 Авторизоваться",
-        style=discord.ButtonStyle.primary,
-        custom_id="auth:request",
-    )
-    async def auth_request(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        await handle_auth_request(interaction)
+db.init_db()
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned,
+    intents=intents,
+    proxy=PROXY,
+    member_cache_flags=discord.MemberCacheFlags.all(),
+    chunk_guilds_at_startup=True,
+)
+cfg = load_config()
+cfg["home_guild_id"] = 1504395064175099985  # главный сервер где созданы все каналы
+db.migrate_from_json(cfg)   # переносит user_servers и stats.json → SQLite (один раз)
+bot.cfg = cfg
+bot.owner_id_cfg = OWNER_ID
 
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+async def main():
+    async with bot:
+        from keep_alive import start_webserver, self_ping_loop, needs_self_ping, health_port
+        # HTTP-сервер и self-ping — оба наследие Replit: там нужен слушающий
+        # порт, чтобы платформа считала Repl живым, и внешний пинг, чтобы он
+        # не уснул. На обычном сервере ни то, ни другое не требуется, поэтому
+        # включаются только по необходимости.
+        _port = health_port()
+        if _port:
+            await start_webserver(bot, _port)
+        else:
+            print("   [web] HTTP-сервер отключён (HEALTH_PORT)")
+        if needs_self_ping():
+            _keepalive_task = asyncio.create_task(self_ping_loop())
+            bot._keepalive_task = _keepalive_task  # prevent garbage collection
+        else:
+            print("   [keepalive] Self-ping не нужен (не Replit)")
+        _exts = [
+            "cogs.proof",
+            "cogs.admin",
+            "cogs.auth",
+            "cogs.servers",
+            "cogs.info",
+            "cogs.context_menus",
+            "cogs.modtools",
+        ]
+        for _ext in _exts:
+            try:
+                await bot.load_extension(_ext)
+                print(f"   ✅ Загружен: {_ext}")
+            except Exception as _e:
+                print(f"   ❌ Ошибка загрузки {_ext}: {_e}")
+                traceback.print_exc()
 
-def make_review_embed(member: discord.Member) -> discord.Embed:
-    embed = discord.Embed(title="📋 Заявка на авторизацию", color=0x3498DB)
-    embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-    embed.add_field(name="Пользователь", value=member.mention, inline=True)
-    embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
-    embed.add_field(
-        name="Аккаунт создан",
-        value=f"<t:{int(member.created_at.timestamp())}:D>",
-        inline=True,
-    )
-    if member.joined_at:
-        embed.add_field(
-            name="Вошёл на сервер",
-            value=f"<t:{int(member.joined_at.timestamp())}:R>",
-            inline=True,
-        )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="Ожидает решения модератора...")
-    return embed
+        # systemd при остановке шлёт SIGTERM. Без обработчика процесс умирает
+        # мгновенно, минуя `async with bot`, — без отключения от Discord и без
+        # сброса SQLite. signal.signal() тут не годится: KeyboardInterrupt,
+        # брошенный посреди работающего цикла событий, до asyncio.run не
+        # доходит. Штатный для asyncio способ — add_signal_handler; закрытие
+        # бота заставляет bot.start() вернуть управление.
+        loop = asyncio.get_running_loop()
 
+        def _shutdown(sig_name: str):
+            print(f"\n⏹️  Получен {sig_name} — завершаю работу")
+            loop.create_task(bot.close())
 
-def make_review_view(user_id: int) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(
-        discord.ui.Button(
-            label="✅ Принять",
-            style=discord.ButtonStyle.success,
-            custom_id=f"auth:approve:{user_id}",
-        )
-    )
-    view.add_item(
-        discord.ui.Button(
-            label="❌ Отклонить",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"auth:reject:{user_id}",
-        )
-    )
-    return view
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(_sig, _shutdown, _sig.name)
+            except NotImplementedError:
+                pass  # Windows не поддерживает — там сработает KeyboardInterrupt
 
-
-def make_disabled_view(approved: bool) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(
-        discord.ui.Button(
-            label="✅ Принять",
-            style=discord.ButtonStyle.success,
-            disabled=True,
-            custom_id="done:approve",
-        )
-    )
-    view.add_item(
-        discord.ui.Button(
-            label="❌ Отклонить",
-            style=discord.ButtonStyle.danger,
-            disabled=True,
-            custom_id="done:reject",
-        )
-    )
-    return view
+        await bot.start(TOKEN)
 
 
-# ─── Interaction handlers ────────────────────────────────────────────────────
-
-async def handle_auth_request(interaction: discord.Interaction):
-    member = interaction.user
-    guild = interaction.guild
-
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if member_role and member_role in member.roles:
-        await interaction.response.send_message(
-            "✅ Вы уже авторизованы!", ephemeral=True
-        )
-        return
-
-    if member.id in pending:
-        await interaction.response.send_message(
-            "⏳ Ваша заявка уже рассматривается. Ожидайте решения модераторов.",
-            ephemeral=True,
-        )
-        return
-
-    review_channel = discord.utils.get(guild.text_channels, name=REVIEW_CHANNEL_NAME)
-    if not review_channel:
-        await interaction.response.send_message(
-            "❌ Ошибка конфигурации: канал заявок не найден. Обратитесь к администратору.",
-            ephemeral=True,
-        )
-        return
-
-    embed = make_review_embed(member)
-    view = make_review_view(member.id)
-    await review_channel.send(embed=embed, view=view)
-    pending.add(member.id)
-
-    await interaction.response.send_message(
-        "✅ Заявка отправлена! Ожидайте решения модераторов.", ephemeral=True
-    )
-
-
-async def handle_approve(interaction: discord.Interaction, user_id: int):
-    guild = interaction.guild
-    member = guild.get_member(user_id)
-
-    if not member:
-        await interaction.response.send_message(
-            "❌ Пользователь покинул сервер.", ephemeral=True
-        )
-        pending.discard(user_id)
-        await _finalize_review(interaction, approved=True, label="Покинул сервер")
-        return
-
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if not member_role:
-        member_role = await guild.create_role(
-            name=MEMBER_ROLE_NAME,
-            color=discord.Color.green(),
-            hoist=True,
-            reason="Автосоздание роли системой авторизации",
-        )
-
-    await member.add_roles(
-        member_role, reason=f"Авторизован модератором {interaction.user}"
-    )
-    pending.discard(user_id)
-
-    embed = interaction.message.embeds[0]
-    embed.color = 0x2ECC71
-    embed.set_footer(
-        text=f"✅ Принят модератором {interaction.user} ({interaction.user.id})"
-    )
-    await interaction.message.edit(embed=embed, view=make_disabled_view(True))
-
+def _git_version() -> str:
     try:
-        await member.send(
-            f"🎉 Ваша заявка на сервер **{guild.name}** одобрена! Добро пожаловать!"
-        )
-    except discord.Forbidden:
-        pass
-
-    await interaction.response.send_message(
-        f"✅ Пользователь {member.mention} авторизован!", ephemeral=True
-    )
-
-
-async def handle_reject(interaction: discord.Interaction, user_id: int):
-    guild = interaction.guild
-    member = guild.get_member(user_id)
-    pending.discard(user_id)
-
-    embed = interaction.message.embeds[0]
-    embed.color = 0xE74C3C
-    embed.set_footer(
-        text=f"❌ Отклонён модератором {interaction.user} ({interaction.user.id})"
-    )
-    await interaction.message.edit(embed=embed, view=make_disabled_view(False))
-
-    if member:
-        try:
-            await member.send(
-                f"😔 Ваша заявка на сервер **{guild.name}** была отклонена."
-            )
-        except discord.Forbidden:
-            pass
-
-    name = str(member) if member else f"ID: {user_id}"
-    await interaction.response.send_message(
-        f"❌ Заявка пользователя **{name}** отклонена.", ephemeral=True
-    )
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        date = subprocess.check_output(
+            ["git", "log", "-1", "--format=%cd", "--date=format:%d.%m.%Y %H:%M"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return f"{date}  (коммит {commit})"
+    except Exception:
+        return "неизвестно"
 
 
-async def _finalize_review(
-    interaction: discord.Interaction, approved: bool, label: str
-):
-    embed = interaction.message.embeds[0]
-    embed.set_footer(text=label)
-    await interaction.message.edit(embed=embed, view=make_disabled_view(approved))
+_ready_once = False
 
-
-# ─── Bot events ─────────────────────────────────────────────────────────────
 
 @bot.event
 async def on_ready():
-    bot.add_view(PersistentAuthView())
-    print(f"✅ Бот запущен как {bot.user} (ID: {bot.user.id})")
-    print("Используйте !setup в своём Discord-сервере для настройки авторизации.")
-
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    if interaction.type != discord.InteractionType.component:
+    global _ready_once
+    if _ready_once:
+        print(f"🔁 Переподключение: {bot.user}")
         return
+    _ready_once = True
+    # Ensure member cache is fully populated so guild.me is never None
+    for guild in bot.guilds:
+        if not guild.chunked:
+            try:
+                await guild.chunk()
+            except Exception:
+                pass
+    await bot.tree.sync()
+    print(f"✅ {bot.user} (ID: {bot.user.id})")
+    print(f"   Версия:   {_git_version()}")
+    print(f"   Серверов: {len(bot.guilds)}")
+    print(f"   Пинг:     {round(bot.latency * 1000)} мс")
+    print("─" * 48)
+    print("   ℹ️  Описание профиля бота (About Me) задаётся")
+    print("      вручную в Discord Developer Portal:")
+    print("      discord.com/developers/applications → выбери бота → Bot → About Me")
+    print("   Рекомендуемый текст:")
+    print("      🛡️ Система управления модерацией Black Russia")
+    print("      📋 Формы наказаний  •  🔐 Авторизация  •  📊 Статистика")
+    print("─" * 48)
 
-    custom_id: str = interaction.data.get("custom_id", "")
-    parts = custom_id.split(":")
 
-    # auth:approve:<user_id> and auth:reject:<user_id> are handled here.
-    # auth:request is handled by PersistentAuthView callback above.
-    if len(parts) == 3 and parts[0] == "auth":
-        try:
-            user_id = int(parts[2])
-        except ValueError:
-            return
-        if parts[1] == "approve":
-            await handle_approve(interaction, user_id)
-        elif parts[1] == "reject":
-            await handle_reject(interaction, user_id)
-
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    # Permissions set during !setup mean new members only see the auth channel.
-    # Nothing extra needed here.
-    pass
-
-
-# ─── Setup command ───────────────────────────────────────────────────────────
-
-@bot.command(name="setup")
-@commands.has_permissions(administrator=True)
-async def setup_cmd(ctx: commands.Context):
-    """One-time setup: creates auth category, channels, roles, and permissions."""
-    guild = ctx.guild
-    msg = await ctx.send("⚙️ Настройка системы авторизации...")
-
-    # 1. Create the Member role
-    member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
-    if not member_role:
-        member_role = await guild.create_role(
-            name=MEMBER_ROLE_NAME,
-            color=discord.Color.green(),
-            hoist=True,
-            reason="Системная роль авторизации",
-        )
-        await ctx.send(f"✅ Создана роль **{MEMBER_ROLE_NAME}**")
-    else:
-        await ctx.send(f"ℹ️ Роль **{MEMBER_ROLE_NAME}** уже существует")
-
-    everyone = guild.default_role
-
-    # 2. Hide all existing channels from @everyone; grant access to Участник
-    await ctx.send("⚙️ Настройка прав доступа к каналам...")
-    for channel in guild.channels:
-        if channel.name in (AUTH_CHANNEL_NAME, REVIEW_CHANNEL_NAME):
+async def _send_error_to_monitoring(title: str, error_text: str):
+    """Send error report to the monitoring channel in every guild."""
+    from helpers import get_guild_cfg
+    for guild in bot.guilds:
+        guild_cfg = get_guild_cfg(cfg, guild.id)
+        ch_id = guild_cfg.get("monitoring", {}).get("🔔-авторизации", 0)
+        ch = guild.get_channel(ch_id) if ch_id else None
+        if not ch:
+            from cogs.servers import MONITORING_CATEGORY
+            cat = discord.utils.get(guild.categories, name=MONITORING_CATEGORY)
+            if cat:
+                ch = discord.utils.get(guild.text_channels, name="🔔-авторизации", category=cat)
+        if not ch:
             continue
+        ts = int(discord.utils.utcnow().timestamp())
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"## 🚨 {title}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"```\n{error_text[:3500]}\n```"),
+            discord.ui.TextDisplay(f"-# <t:{ts}:f>"),
+            accent_color=0xE74C3C,
+        ))
         try:
-            await channel.set_permissions(everyone, view_channel=False)
-            await channel.set_permissions(member_role, view_channel=True)
-        except discord.Forbidden:
+            await ch.send(view=view)
+        except Exception:
             pass
 
-    # 3. Create auth category
-    auth_category = discord.utils.get(guild.categories, name=AUTH_CATEGORY_NAME)
-    if not auth_category:
-        cat_overwrites = {
-            everyone: discord.PermissionOverwrite(
-                view_channel=True, send_messages=False
-            ),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        auth_category = await guild.create_category(
-            name=AUTH_CATEGORY_NAME,
-            overwrites=cat_overwrites,
-            reason="Категория авторизации",
-        )
-        await ctx.send(f"✅ Создана категория **{AUTH_CATEGORY_NAME}**")
-    else:
-        await ctx.send(f"ℹ️ Категория **{AUTH_CATEGORY_NAME}** уже существует")
 
-    # 4. Create auth channel
-    auth_channel = discord.utils.get(guild.text_channels, name=AUTH_CHANNEL_NAME)
-    if not auth_channel:
-        ch_overwrites = {
-            everyone: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=False,
-                read_message_history=True,
-            ),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        auth_channel = await guild.create_text_channel(
-            name=AUTH_CHANNEL_NAME,
-            category=auth_category,
-            overwrites=ch_overwrites,
-            topic="Нажмите кнопку, чтобы получить доступ к серверу",
-            reason="Канал авторизации",
-        )
-        await ctx.send(f"✅ Создан канал {auth_channel.mention}")
-    else:
-        await ctx.send(f"ℹ️ Канал **#{AUTH_CHANNEL_NAME}** уже существует")
-
-    # 5. Create review channel (staff only)
-    review_channel = discord.utils.get(guild.text_channels, name=REVIEW_CHANNEL_NAME)
-    if not review_channel:
-        rev_overwrites: dict = {
-            everyone: discord.PermissionOverwrite(view_channel=False),
-            member_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True
-            ),
-        }
-        # Grant access to every role that has administrator permission
-        for role in guild.roles:
-            if role.permissions.administrator and role != everyone:
-                rev_overwrites[role] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True
-                )
-
-        review_channel = await guild.create_text_channel(
-            name=REVIEW_CHANNEL_NAME,
-            category=auth_category,
-            overwrites=rev_overwrites,
-            topic="Заявки на авторизацию — только для модераторов",
-            reason="Канал рассмотрения заявок",
-        )
-        await ctx.send(f"✅ Создан канал {review_channel.mention}")
-    else:
-        await ctx.send(f"ℹ️ Канал **#{REVIEW_CHANNEL_NAME}** уже существует")
-
-    # 6. Post the auth embed with button (clear old bot messages first)
-    await auth_channel.purge(limit=20, check=lambda m: m.author == guild.me)
-
-    embed = discord.Embed(
-        title="🔐 Авторизация",
-        description=(
-            "Добро пожаловать на сервер!\n\n"
-            "Для получения доступа к каналам нажмите кнопку ниже.\n"
-            "Ваша заявка будет рассмотрена модераторами в ближайшее время."
-        ),
-        color=0x3498DB,
-    )
-    embed.set_footer(text="После одобрения заявки вам откроется доступ ко всем каналам.")
-
-    await auth_channel.send(embed=embed, view=PersistentAuthView())
-
-    await ctx.send(
-        f"🎉 **Настройка завершена!**\n"
-        f"• Канал авторизации: {auth_channel.mention}\n"
-        f"• Канал заявок (только модераторы): {review_channel.mention}\n"
-        f"• Роль авторизованных участников: **{MEMBER_ROLE_NAME}**\n\n"
-        f"Новые участники видят **только** канал авторизации."
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    tb = traceback.format_exc()
+    print(tb)
+    cmd = getattr(interaction.command, "name", "unknown")
+    # For autocomplete interactions, respond() and send_message() are invalid —
+    # only autocomplete() works, so just log and return.
+    if interaction.type == discord.InteractionType.autocomplete:
+        print(f"   [autocomplete error] /{cmd}: {error}")
+        return
+    # Answer the user first — the 3-second initial-response window can expire
+    # if we do slow network calls before responding.
+    msg = f"❌ Произошла ошибка: `{error}`"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+    await _send_error_to_monitoring(
+        f"Ошибка команды `/{cmd}`",
+        f"Пользователь: {interaction.user} ({interaction.user.id})\n{tb}",
     )
 
 
-@setup_cmd.error
-async def setup_error(ctx: commands.Context, error: Exception):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Эта команда доступна только администраторам.")
-    else:
-        await ctx.send(f"❌ Ошибка: {error}")
+@bot.event
+async def on_error(event: str, *args, **kwargs):
+    tb = traceback.format_exc()
+    print(tb)
+    await _send_error_to_monitoring(f"Ошибка события `{event}`", tb)
 
 
-bot.run(TOKEN)
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    print("\n⏹️  Остановка по Ctrl+C")
