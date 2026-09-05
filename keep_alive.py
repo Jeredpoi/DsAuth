@@ -34,7 +34,7 @@ def _public_url() -> str:
     domain = _replit_domain()
     if domain:
         return f"https://{domain}/health"
-    return "http://localhost:8080/health"
+    return f"http://localhost:{_port}/health"
 
 _bot_ref = None
 _last_ok_ping = 0.0  # время последнего успешного self-ping (time.time())
@@ -53,22 +53,58 @@ async def _health_handler(request):
     return web.Response(text=text, content_type="text/plain")
 
 
-async def start_webserver(bot=None):
-    global _bot_ref
+DEFAULT_PORT = 1324   # 8080 слишком популярен и часто уже занят на сервере
+REPLIT_PORT  = 8080   # на Replit порт зафиксирован в .replit (8080 → 80)
+
+
+def health_port() -> int | None:
+    """Порт для /health. None — сервер не поднимать.
+
+    Эндпоинт нужен для внешнего мониторинга; на Replit он обязателен ещё и
+    потому, что платформа считает Repl живым, только пока тот слушает HTTP.
+    Переопределяется переменной HEALTH_PORT.
+    """
+    raw = os.getenv("HEALTH_PORT", "").strip()
+    if raw:
+        if raw in ("0", "off", "no"):
+            return None
+        try:
+            port = int(raw)
+        except ValueError:
+            print(f"   [web] HEALTH_PORT='{raw}' — не число, сервер не запускаю")
+            return None
+        return port if 1 <= port <= 65535 else None
+    return REPLIT_PORT if _replit_domain() else DEFAULT_PORT
+
+
+async def start_webserver(bot=None, port: int = DEFAULT_PORT):
+    """Поднять /health. Возвращает runner либо None, если порт занят.
+
+    Занятый порт не должен ронять бота: HTTP-сервер здесь вспомогательный,
+    а модерация — основная работа.
+    """
+    global _bot_ref, _port
     _bot_ref = bot
+    _port = port
     app = web.Application()
     app.router.add_get("/", _health_handler)
     app.router.add_get("/health", _health_handler)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
-    await site.start()
-    print("   [web] HTTP сервер запущен на :8080")
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    try:
+        await site.start()
+    except OSError as e:
+        print(f"   [web] Порт {port} занят — работаю без /health (на модерацию не влияет).")
+        print("   [web] Нужен другой порт: HEALTH_PORT=<номер> в .env")
+        await runner.cleanup()
+        return None
+    print(f"   [web] HTTP сервер запущен на :{port}")
     return runner
 
 
 PING_INTERVAL = 60   # Replit засыпает через ~5 мин без внешней активности — пингуем чаще
-LOCAL_URL = "http://localhost:8080/health"
+_port = DEFAULT_PORT
 
 
 async def self_ping_loop():
@@ -100,7 +136,7 @@ async def self_ping_loop():
                 # Public URL failed — check the local server so we know whether
                 # the web server itself or the external route is the problem
                 try:
-                    async with session.get(LOCAL_URL) as resp:
+                    async with session.get(f"http://localhost:{_port}/health") as resp:
                         local_ok = resp.status < 500
                 except Exception:
                     local_ok = False

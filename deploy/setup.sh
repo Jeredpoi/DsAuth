@@ -173,7 +173,7 @@ if systemctl is-active --quiet "$SERVICE"; then
     printf '%s✓ Бот запущен%s\n\n' "$GRN$BLD" "$RST"
     echo "  Логи:        journalctl -u $SERVICE -f"
     echo "  Перезапуск:  systemctl restart $SERVICE"
-    echo "  Состояние:   curl localhost:8080/health"
+    echo "  Состояние:   curl localhost:1324/health"
     echo
     echo "  Дальше выполни в Discord команду /deploy — она создаёт каналы"
     echo "  и раздаёт ролям права, от которых зависит видимость команд."

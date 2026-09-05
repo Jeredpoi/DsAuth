@@ -39,16 +39,21 @@ bot.owner_id_cfg = OWNER_ID
 
 async def main():
     async with bot:
-        from keep_alive import start_webserver, self_ping_loop, needs_self_ping
-        # HTTP-сервер поднимаем всегда: /health удобен для внешнего мониторинга.
-        # А self-ping нужен только на Replit — на обычном сервере это пустой
-        # трафик к самому себе каждую минуту.
-        await start_webserver(bot)
+        from keep_alive import start_webserver, self_ping_loop, needs_self_ping, health_port
+        # HTTP-сервер и self-ping — оба наследие Replit: там нужен слушающий
+        # порт, чтобы платформа считала Repl живым, и внешний пинг, чтобы он
+        # не уснул. На обычном сервере ни то, ни другое не требуется, поэтому
+        # включаются только по необходимости.
+        _port = health_port()
+        if _port:
+            await start_webserver(bot, _port)
+        else:
+            print("   [web] HTTP-сервер отключён (HEALTH_PORT)")
         if needs_self_ping():
             _keepalive_task = asyncio.create_task(self_ping_loop())
             bot._keepalive_task = _keepalive_task  # prevent garbage collection
         else:
-            print("   [keepalive] Self-ping не нужен (не Replit) — только /health")
+            print("   [keepalive] Self-ping не нужен (не Replit)")
         _exts = [
             "cogs.proof",
             "cogs.admin",
